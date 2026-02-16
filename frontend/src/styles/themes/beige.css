@@ -1,0 +1,14 @@
+:root[data-theme="beige"] {
+  --bg-primary: #f5f0e8;
+  --bg-secondary: #ede6d8;
+  --bg-card: #e8dcc8;
+  --bg-input: #f0ead8;
+  --text-primary: #3a3020;
+  --text-secondary: #6a5a40;
+  --text-muted: #9a8a6a;
+  --accent: #c07830;
+  --accent-hover: #d08840;
+  --accent-soft: rgba(192, 120, 48, 0.15);
+  --border: #d0c4a8;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}

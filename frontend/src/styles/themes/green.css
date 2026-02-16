@@ -1,0 +1,13 @@
+:root[data-theme="green"] {
+  --bg-primary: #1b2d1b;
+  --bg-secondary: #243524;
+  --bg-card: #2d4a2d;
+  --bg-input: #1b2d1b;
+  --text-primary: #d4e8d4;
+  --text-secondary: #8fae8f;
+  --text-muted: #5a7a5a;
+  --accent: #4ecdc4;
+  --accent-hover: #6ee0d8;
+  --accent-soft: rgba(78, 205, 196, 0.15);
+  --border: #3a5a3a;
+}
