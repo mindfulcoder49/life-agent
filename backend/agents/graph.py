@@ -4,6 +4,7 @@ Routes each user message to the correct agent based on who is currently
 active for that user+session. Supports multiple chat sessions per user.
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from langchain_core.messages import HumanMessage, AIMessage
@@ -88,7 +89,8 @@ def create_graph_runner():
             })
         return result
 
-    async def run(user_id: int, message: str, session_id: str = "default") -> dict:
+    def _run_core(user_id: int, message: str, session_id: str = "default", on_event=None) -> dict:
+        """Core routing logic. Runs synchronously. on_event is optional callback."""
         state = _get_session(user_id, session_id)
         state["messages"].append(HumanMessage(content=message))
 
@@ -99,8 +101,11 @@ def create_graph_runner():
         log_conversation_turn(user_id, session_id, "user", "input", message)
 
         try:
+            if on_event:
+                on_event("agent_start", {"agent": active, "label": AGENT_LABELS[active]})
+
             agent_fn = AGENT_RUNNERS[active]
-            result = agent_fn(user_id, state["messages"], state["context_cache"])
+            result = agent_fn(user_id, state["messages"], state["context_cache"], on_event)
 
             response = result["response"]
             context_log = result["context_log"]
@@ -118,8 +123,11 @@ def create_graph_runner():
                     if response:
                         state["messages"].append(AIMessage(content=response))
 
+                    if on_event:
+                        on_event("agent_start", {"agent": hand_off_to, "label": AGENT_LABELS[hand_off_to]})
+
                     spec_result = AGENT_RUNNERS[hand_off_to](
-                        user_id, state["messages"], state["context_cache"])
+                        user_id, state["messages"], state["context_cache"], on_event)
                     response = spec_result["response"]
                     context_log = context_log + spec_result["context_log"]
                     spec_hand_off = spec_result.get("hand_off_to")
@@ -133,7 +141,7 @@ def create_graph_runner():
                     elif spec_hand_off and spec_hand_off in SPECIALISTS and spec_hand_off != hand_off_to:
                         state["active_agent"] = spec_hand_off
                         response, context_log = _chain_to(
-                            user_id, session_id, spec_hand_off, state, response, context_log)
+                            user_id, session_id, spec_hand_off, state, response, context_log, on_event)
                     else:
                         state["active_agent"] = hand_off_to
                 else:
@@ -152,7 +160,10 @@ def create_graph_runner():
                     if response:
                         state["messages"].append(AIMessage(content=response))
 
-                    h_result = run_hydrogen(user_id, state["messages"], state["context_cache"])
+                    if on_event:
+                        on_event("agent_start", {"agent": "hydrogen", "label": AGENT_LABELS["hydrogen"]})
+
+                    h_result = run_hydrogen(user_id, state["messages"], state["context_cache"], on_event)
                     h_response = h_result["response"]
                     h_hand_off = h_result.get("hand_off_to")
                     context_log = context_log + h_result["context_log"]
@@ -167,8 +178,11 @@ def create_graph_runner():
                             response = response + "\n\n" + h_response
                             state["messages"].append(AIMessage(content=h_response))
 
+                        if on_event:
+                            on_event("agent_start", {"agent": h_hand_off, "label": AGENT_LABELS[h_hand_off]})
+
                         next_result = AGENT_RUNNERS[h_hand_off](
-                            user_id, state["messages"], state["context_cache"])
+                            user_id, state["messages"], state["context_cache"], on_event)
                         response = (response + "\n\n" if response else "") + next_result["response"]
                         context_log = context_log + next_result["context_log"]
                         state["active_agent"] = h_hand_off
@@ -182,7 +196,7 @@ def create_graph_runner():
                 elif hand_off_to in SPECIALISTS and hand_off_to != active:
                     state["active_agent"] = hand_off_to
                     response, context_log = _chain_to(
-                        user_id, session_id, hand_off_to, state, response, context_log)
+                        user_id, session_id, hand_off_to, state, response, context_log, on_event)
                 else:
                     state["active_agent"] = active
 
@@ -223,12 +237,14 @@ def create_graph_runner():
                 state["messages"].pop()
             raise
 
-    def _chain_to(user_id, session_id, specialist, state, prev_response, context_log):
+    def _chain_to(user_id, session_id, specialist, state, prev_response, context_log, on_event=None):
         """Call a chained specialist, return updated (response, context_log)."""
         logger.info(f"[user={user_id}|{session_id}] Chaining -> {specialist}")
         if prev_response:
             state["messages"].append(AIMessage(content=prev_response))
-        result = AGENT_RUNNERS[specialist](user_id, state["messages"], state["context_cache"])
+        if on_event:
+            on_event("agent_start", {"agent": specialist, "label": AGENT_LABELS[specialist]})
+        result = AGENT_RUNNERS[specialist](user_id, state["messages"], state["context_cache"], on_event)
         new_response = (prev_response + "\n\n" if prev_response else "") + result["response"]
         new_context = context_log + result["context_log"]
         log_conversation_turn(user_id, session_id, specialist, "output", result["response"])
@@ -239,7 +255,16 @@ def create_graph_runner():
             state["active_agent"] = specialist
         return new_response, new_context
 
+    async def run(user_id: int, message: str, session_id: str = "default") -> dict:
+        """Backward-compatible blocking run (no streaming)."""
+        return _run_core(user_id, message, session_id)
+
+    async def run_stream(user_id: int, message: str, session_id: str = "default", on_event=None) -> dict:
+        """Streaming run — executes _run_core in a thread with on_event callback."""
+        return await asyncio.to_thread(_run_core, user_id, message, session_id, on_event)
+
     run.reset = reset
     run.get_active_agent = get_active_agent
     run.list_sessions = list_sessions
+    run.run_stream = run_stream
     return run

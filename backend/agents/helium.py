@@ -7,7 +7,7 @@ Uses MODEL_SMALL for cost efficiency.
 from datetime import datetime, timezone
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.life_goal_tools import make_life_goal_tools
 from agents import get_api_key
 from file_logger import logger
@@ -42,7 +42,7 @@ Interview the user to define their life goals. Each goal needs: title, descripti
 - Be warm but efficient. Gather the data, confirm, move on."""
 
 
-def run_helium(user_id: int, messages: list, context_cache: dict = None) -> dict:
+def run_helium(user_id: int, messages: list, context_cache: dict = None, on_event=None) -> dict:
     """Run helium agent. Returns {response, context_log, hand_off_to}."""
     logger.info(f"[user={user_id}] Helium processing")
     context_log = []
@@ -80,7 +80,18 @@ def run_helium(user_id: int, messages: list, context_cache: dict = None) -> dict
     # ReAct loop
     for i in range(10):
         logger.debug(f"[user={user_id}] Helium ReAct iteration {i}")
-        response = llm_with_tools.invoke(call_messages)
+        if on_event:
+            full_response = None
+            for chunk in llm_with_tools.stream(call_messages):
+                if full_response is None:
+                    full_response = chunk
+                else:
+                    full_response = full_response + chunk
+                if chunk.content:
+                    on_event("token", {"content": chunk.content, "agent": "helium"})
+            response = full_response
+        else:
+            response = llm_with_tools.invoke(call_messages)
         call_messages.append(response)
 
         if not response.tool_calls:
@@ -91,7 +102,11 @@ def run_helium(user_id: int, messages: list, context_cache: dict = None) -> dict
             tool_fn = tool_map.get(tc["name"])
             if tool_fn:
                 logger.info(f"[user={user_id}] Helium calling tool: {tc['name']}({tc['args']})")
+                if on_event:
+                    on_event("tool_start", {"tool": tc["name"], "agent": "helium"})
                 result = tool_fn.invoke(tc["args"])
+                if on_event:
+                    on_event("tool_end", {"tool": tc["name"], "agent": "helium"})
                 tool_msg = ToolMessage(content=str(result), tool_call_id=tc["id"])
                 call_messages.append(tool_msg)
                 context_log.append({
@@ -106,7 +121,7 @@ def run_helium(user_id: int, messages: list, context_cache: dict = None) -> dict
     new_messages = call_messages[num_input_messages:]
     final_text = ""
     for msg in reversed(new_messages):
-        if hasattr(msg, "content") and msg.content and hasattr(msg, "type") and msg.type == "ai":
+        if isinstance(msg, AIMessage) and msg.content:
             if not getattr(msg, "tool_calls", None):
                 final_text = msg.content
                 break

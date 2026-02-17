@@ -7,7 +7,7 @@ Uses MODEL_SMALL for cost efficiency.
 from datetime import datetime, timezone
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.task_tools import make_task_tools
 from agents import get_api_key
 from file_logger import logger
@@ -46,7 +46,7 @@ Interview the user to capture their tasks, obligations, and worries. Each task n
 - Cognitive load: 1 = barely think about it, 10 = constantly on their mind."""
 
 
-def run_beryllium(user_id: int, messages: list, context_cache: dict = None) -> dict:
+def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_event=None) -> dict:
     """Run beryllium agent. Returns {response, context_log, hand_off_to}."""
     logger.info(f"[user={user_id}] Beryllium processing")
     context_log = []
@@ -82,7 +82,18 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None) -> d
 
     for i in range(10):
         logger.debug(f"[user={user_id}] Beryllium ReAct iteration {i}")
-        response = llm_with_tools.invoke(call_messages)
+        if on_event:
+            full_response = None
+            for chunk in llm_with_tools.stream(call_messages):
+                if full_response is None:
+                    full_response = chunk
+                else:
+                    full_response = full_response + chunk
+                if chunk.content:
+                    on_event("token", {"content": chunk.content, "agent": "beryllium"})
+            response = full_response
+        else:
+            response = llm_with_tools.invoke(call_messages)
         call_messages.append(response)
 
         if not response.tool_calls:
@@ -93,7 +104,11 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None) -> d
             tool_fn = tool_map.get(tc["name"])
             if tool_fn:
                 logger.info(f"[user={user_id}] Beryllium calling tool: {tc['name']}({tc['args']})")
+                if on_event:
+                    on_event("tool_start", {"tool": tc["name"], "agent": "beryllium"})
                 result = tool_fn.invoke(tc["args"])
+                if on_event:
+                    on_event("tool_end", {"tool": tc["name"], "agent": "beryllium"})
                 tool_msg = ToolMessage(content=str(result), tool_call_id=tc["id"])
                 call_messages.append(tool_msg)
                 context_log.append({
@@ -107,7 +122,7 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None) -> d
     new_messages = call_messages[num_input_messages:]
     final_text = ""
     for msg in reversed(new_messages):
-        if hasattr(msg, "content") and msg.content and hasattr(msg, "type") and msg.type == "ai":
+        if isinstance(msg, AIMessage) and msg.content:
             if not getattr(msg, "tool_calls", None):
                 final_text = msg.content
                 break

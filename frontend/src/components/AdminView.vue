@@ -7,8 +7,34 @@ const activeTab = ref('users')
 const users = ref([])
 const logs = ref([])
 const logFilter = ref({ level: '', source: '' })
+const debugEnabled = ref(false)
+const debugLoading = ref(false)
 
-onMounted(() => loadUsers())
+onMounted(() => {
+  loadUsers()
+  loadDebugState()
+})
+
+async function loadDebugState() {
+  try {
+    const res = await client.get('/admin/debug-logging')
+    debugEnabled.value = res.data.enabled
+  } catch {}
+}
+
+async function toggleDebug() {
+  debugLoading.value = true
+  try {
+    const res = await client.put('/admin/debug-logging', {
+      enabled: !debugEnabled.value,
+    })
+    debugEnabled.value = res.data.enabled
+  } catch (err) {
+    alert(err.response?.data?.detail || 'Error toggling debug logging')
+  } finally {
+    debugLoading.value = false
+  }
+}
 
 async function loadUsers() {
   try {
@@ -47,6 +73,24 @@ function switchTab(tab) {
 <template>
   <div class="page">
     <h2 style="margin-bottom: 16px;">Admin</h2>
+
+    <div class="card debug-toggle-card">
+      <div class="debug-toggle-row">
+        <div>
+          <strong>Debug Logging</strong>
+          <p class="debug-desc">Log full conversation transcripts to debug_conversations.log</p>
+        </div>
+        <button
+          class="toggle-btn"
+          :class="{ on: debugEnabled }"
+          :disabled="debugLoading"
+          @click="toggleDebug"
+        >
+          {{ debugEnabled ? 'ON' : 'OFF' }}
+        </button>
+      </div>
+    </div>
+
     <div class="tabs">
       <button :class="{ active: activeTab === 'users' }" @click="switchTab('users')">Users</button>
       <button :class="{ active: activeTab === 'logs' }" @click="switchTab('logs')">Logs</button>
@@ -87,3 +131,41 @@ function switchTab(tab) {
     </template>
   </div>
 </template>
+
+<style scoped>
+.debug-toggle-card {
+  margin-bottom: 16px;
+}
+.debug-toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.debug-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.toggle-btn {
+  min-width: 56px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.toggle-btn.on {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+</style>

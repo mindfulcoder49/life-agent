@@ -331,9 +331,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Life Agent", lifespan=lifespan)
 
+_default_origins = ["http://localhost:5173", "http://localhost:3000"]
+_env_origins = os.getenv("ALLOWED_ORIGINS", "")
+_origins = [o.strip() for o in _env_origins.split(",") if o.strip()] if _env_origins else _default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -359,8 +363,16 @@ app.include_router(todo_lists_router)
 app.include_router(admin_router)
 app.include_router(help_router)
 
+@app.get("/api/health")
+async def health():
+    return {"status": "ok"}
+
 # Serve frontend static files in production
-frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+# Check Docker layout (static/) first, then dev layout (../frontend/dist)
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+_dev_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+frontend_dist = _static_dir if os.path.isdir(_static_dir) else _dev_dist
+
 if os.path.isdir(frontend_dist):
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
 

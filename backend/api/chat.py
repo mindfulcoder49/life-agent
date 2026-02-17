@@ -1,4 +1,8 @@
+import asyncio
+import json
+
 from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import StreamingResponse
 from models import ChatRequest
 from auth import get_current_user
 from database import insert_row, get_rows, get_row, count_rows, get_db
@@ -21,6 +25,48 @@ async def chat(request: Request, body: ChatRequest):
     except Exception as e:
         log_error("chat", "error", str(e), user_id=user["id"])
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/stream")
+async def chat_stream(request: Request, body: ChatRequest):
+    user = get_current_user(request)
+    if graph_runner is None:
+        raise HTTPException(status_code=503, detail="Agent system not initialized")
+    if not hasattr(graph_runner, 'run_stream'):
+        raise HTTPException(status_code=503, detail="Streaming not available")
+
+    queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def on_event(event_type, data):
+        loop.call_soon_threadsafe(queue.put_nowait, (event_type, data))
+
+    async def run_graph():
+        try:
+            result = await graph_runner.run_stream(
+                user["id"], body.message, body.session_id or "default", on_event)
+            loop.call_soon_threadsafe(queue.put_nowait, ("done", result))
+        except Exception as e:
+            log_error("chat", "stream_error", str(e), user_id=user["id"])
+            loop.call_soon_threadsafe(queue.put_nowait, ("error", {"detail": str(e)}))
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, ("__end__", None))
+
+    task = asyncio.create_task(run_graph())
+
+    async def event_generator():
+        while True:
+            event_type, data = await queue.get()
+            if event_type == "__end__":
+                break
+            yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+        await task
+
+    log_info("chat", "stream", "Streaming chat started", user_id=user["id"])
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @router.get("/sessions")
 def get_sessions(request: Request):

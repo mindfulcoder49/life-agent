@@ -14,18 +14,32 @@ onMounted(() => {
   chat.loadSessions()
 })
 
-watch(() => chat.messages.length, async () => {
-  await nextTick()
+function scrollToBottom() {
   if (messagesEl.value) {
     messagesEl.value.scrollTop = messagesEl.value.scrollHeight
   }
+}
+
+watch(() => chat.messages.length, async () => {
+  await nextTick()
+  scrollToBottom()
+})
+
+watch(() => chat.streamingContent, async () => {
+  await nextTick()
+  scrollToBottom()
+})
+
+watch(() => chat.toolStatus, async () => {
+  await nextTick()
+  scrollToBottom()
 })
 
 async function send() {
   const text = input.value.trim()
   if (!text || chat.sending) return
   input.value = ''
-  await chat.sendMessage(text)
+  await chat.sendMessageStream(text)
 }
 
 async function clearChat() {
@@ -85,7 +99,7 @@ async function pickSession(sid) {
       </div>
     </div>
     <div class="messages" ref="messagesEl">
-      <div v-if="chat.messages.length === 0" class="empty-state">
+      <div v-if="chat.messages.length === 0 && !chat.streaming" class="empty-state">
         <p>Start a conversation with your Life Agent.</p>
         <p style="margin-top: 8px; font-size: 13px;">Tell me about your life goals, how you're feeling, or what's on your mind.</p>
       </div>
@@ -95,7 +109,21 @@ async function pickSession(sid) {
         :message="msg"
         @delete="(id) => chat.deleteMessage(id)"
       />
-      <div v-if="chat.sending" class="typing">
+      <div v-if="chat.streaming" class="streaming-area">
+        <div v-if="chat.toolStatus" class="tool-indicator">
+          <span class="tool-spinner"></span>
+          Calling {{ chat.toolStatus.tool }}...
+        </div>
+        <div v-if="chat.streamingContent" class="message assistant streaming-message">
+          <div class="bubble">
+            <div class="content">{{ chat.streamingContent }}<span class="streaming-cursor">|</span></div>
+          </div>
+        </div>
+        <div v-if="!chat.toolStatus && !chat.streamingContent" class="typing">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        </div>
+      </div>
+      <div v-else-if="chat.sending" class="typing">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
       </div>
     </div>
@@ -254,5 +282,49 @@ async function pickSession(sid) {
 @keyframes bounce {
   0%, 80%, 100% { transform: translateY(0); }
   40% { transform: translateY(-6px); }
+}
+
+/* Streaming UI */
+.streaming-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+.tool-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--text-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.streaming-message .bubble {
+  max-width: 80%;
+}
+.streaming-message .content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.streaming-cursor {
+  animation: blink 1s step-end infinite;
+  color: var(--accent);
+  font-weight: 700;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 </style>

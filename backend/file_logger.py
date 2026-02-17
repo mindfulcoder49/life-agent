@@ -3,7 +3,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 
-LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
+from config import LOG_DIR
 os.makedirs(LOG_DIR, exist_ok=True)
 
 LOG_FILE = os.path.join(LOG_DIR, "life_agent.log")
@@ -33,9 +33,24 @@ debug_logger.setLevel(logging.DEBUG)
 debug_logger.addHandler(_debug_handler)
 debug_logger.propagate = False
 
+# Debug logging toggle - off by default
+_debug_enabled = False
+
+
+def is_debug_enabled():
+    return _debug_enabled
+
+
+def set_debug_enabled(enabled: bool):
+    global _debug_enabled
+    _debug_enabled = enabled
+    logger.info(f"Debug logging {'enabled' if enabled else 'disabled'}")
+
 
 def log_conversation_turn(user_id, session_id, agent, direction, content, tool_calls=None):
     """Log a complete conversation entry for debug analysis."""
+    if not _debug_enabled:
+        return
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     sep = "=" * 60
     debug_logger.debug(f"\n{sep}")

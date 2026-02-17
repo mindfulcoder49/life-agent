@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel
 from models import HelpArticleCreate, DataUpdate
 from auth import require_admin
 from database import get_rows, get_row, delete_row, insert_row, update_row, count_rows, get_db
+from file_logger import is_debug_enabled, set_debug_enabled
 import json
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -42,6 +44,23 @@ def list_logs(request: Request, limit: int = 100, offset: int = 0, level: str = 
     rows = get_rows("logs", filters=filters, limit=limit, offset=offset)
     total = count_rows("logs", filters=filters)
     return {"items": rows, "total": total}
+
+@router.get("/debug-logging")
+def get_debug_logging(request: Request):
+    require_admin(request)
+    return {"enabled": is_debug_enabled()}
+
+
+class DebugLoggingUpdate(BaseModel):
+    enabled: bool
+
+
+@router.put("/debug-logging")
+def update_debug_logging(request: Request, body: DebugLoggingUpdate):
+    require_admin(request)
+    set_debug_enabled(body.enabled)
+    return {"enabled": is_debug_enabled()}
+
 
 @router.get("/help-articles")
 def list_articles(request: Request):

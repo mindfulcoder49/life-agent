@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, Response, HTTPException
 from models import RegisterRequest, LoginRequest
 from auth import hash_password, verify_password, create_session, get_current_user, delete_session
 from database import insert_row, get_db
+from config import COOKIE_SECURE
 from logging_service import log_info
 import json
 
@@ -30,7 +31,7 @@ def register(req: RegisterRequest, response: Response):
     }
     user_id = insert_row("users", user_data)
     token = create_session(user_id)
-    response.set_cookie("session_token", token, httponly=True, samesite="lax", max_age=72*3600)
+    response.set_cookie("session_token", token, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=72*3600)
     log_info("auth", "register", f"User {req.username} registered", user_id=user_id)
     return {"id": user_id, "username": req.username, "display_name": user_data["display_name"]}
 
@@ -48,7 +49,7 @@ def login(req: LoginRequest, response: Response):
     if not verify_password(req.password, user_data["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_session(row["id"])
-    response.set_cookie("session_token", token, httponly=True, samesite="lax", max_age=72*3600)
+    response.set_cookie("session_token", token, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=72*3600)
     log_info("auth", "login", f"User {req.username} logged in", user_id=row["id"])
     return {
         "id": row["id"],
