@@ -74,6 +74,16 @@ def init_db():
             updated_at TEXT
         );
     """)
+    # --- Migrations ---
+    # Backfill session_id='default' on chat_contexts rows that don't have it
+    conn.execute("""
+        UPDATE chat_contexts
+        SET data = json_set(data, '$.session_id', 'default'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE json_extract(data, '$.session_id') IS NULL
+    """)
+    conn.commit()
+
     conn.close()
 
 def _now():

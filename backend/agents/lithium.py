@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
-from agents.tools.state_tools import make_state_tools
+from agents.tools.state_tools import make_state_tools, format_states_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
@@ -20,16 +20,18 @@ Current date/time: {now}
 ## Purpose
 Interview the user to record their current physical/mental state. You need to collect: food (what they ate recently), exercise (recent activity), sleep (last night — duration and quality), energy (1-10), soreness (1-10), sickness (1-10), and any notes.
 
+{states_section}
+
 ## Tools
-- get_recent_states: Check recent state records (ALWAYS call this first)
-- add_user_state: Save the state once you have the information
+- add_user_state: Create a NEW state check-in (use only for genuinely new sessions)
+- update_user_state: Update an EXISTING state by ID — use this to add fields to a state you already created this session
 - finish_conversation: Hand off when user confirms they're done
 
 ## Flow
-1. Call get_recent_states first.
+1. Review the recent states shown above.
 2. If this is the user's first state check, introduce the concept: "Hi, I'm Lithium, the state check-in agent. I track how you're doing physically so we can make better task recommendations. Let me ask a few quick questions."
 3. Ask about food, exercise, and sleep first. Then ask about energy (1-10), soreness (1-10), and sickness (1-10). You can ask 2-3 things at a time.
-4. Save partial data as you get it. Don't wait for every field — save what you have and update as you learn more.
+4. Save partial data as you get it using add_user_state. For subsequent updates in the SAME check-in, use update_user_state with the state ID returned from add_user_state — do NOT create duplicate states.
 5. Summarize what you saved: "Here's your state: [summary]. Anything to add or change?"
 6. When the user confirms, call finish_conversation with next_agent="beryllium" (onboarding) or "hydrogen" (returning user).
 
@@ -38,6 +40,7 @@ Interview the user to record their current physical/mental state. You need to co
 - Do not re-introduce yourself if you already have in this conversation.
 - Do not call finish_conversation until the user confirms.
 - Save partial information immediately. If the user gives you food and sleep info, save that now — don't wait for energy/soreness/sickness.
+- IMPORTANT: Only call add_user_state ONCE per check-in session. After the first save, always use update_user_state with the returned state ID to add more fields.
 - Be warm but efficient. Collect the data, save it, confirm, move on.
 - If the user has already provided information in earlier messages, use it — don't ask again."""
 
@@ -52,7 +55,7 @@ def run_lithium(user_id: int, messages: list, context_cache: dict = None, on_eve
     api_key = get_api_key(user_id)
     hand_off = {"to": None}
 
-    base_tools = make_state_tools(user_id)
+    base_tools = make_state_tools(user_id, context_cache)
 
     @tool
     def finish_conversation(next_agent: str = "hydrogen", summary: str = "") -> str:
@@ -69,7 +72,8 @@ def run_lithium(user_id: int, messages: list, context_cache: dict = None, on_eve
     tool_map = {t.name: t for t in tools}
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str)
+    states_section = format_states_for_prompt(context_cache.get("recent_states", []))
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str, states_section=states_section)
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
     num_input_messages = len(call_messages)

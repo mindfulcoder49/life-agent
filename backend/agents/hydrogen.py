@@ -9,7 +9,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.life_goal_tools import make_life_goal_tools
-from agents.tools.state_tools import make_state_tools
+from agents.tools.state_tools import format_states_for_prompt
 from agents.tools.task_tools import make_task_tools
 from agents.tools.todo_tools import make_todo_tools
 from agents.tools.help_tools import make_help_tools
@@ -29,14 +29,26 @@ Current date/time: {now}
 ## Routing Logic — FOLLOW THIS ORDER STRICTLY
 Use your tools to check the user's data, then route:
 1. NO life goals exist -> route to helium. This is ALWAYS the first priority.
-2. Life goals exist but NO state check in the past 4 hours -> route to lithium
-3. Life goals + recent state but NO tasks -> route to beryllium
-4. Life goals + recent state + tasks -> offer a daily recommendation, or ask what they'd like to do
-5. If the user explicitly asks to update goals/state/tasks -> route to that agent immediately
-6. If the user says yes to a recommendation -> read all data (goals, last 10 states, last 2 days completed tasks, overdue recurring tasks, all incomplete one-time tasks) and synthesize a prioritized daily plan, then save it as a todo list
+2. User explicitly asks to update/add goals -> route to helium
+3. User explicitly asks to update/add/manage tasks -> route to beryllium
+4. User explicitly asks about state/check-in -> route to lithium
+5. Life goals exist, NO state in past 4 hours, AND no explicit request from the user -> route to lithium
+6. Life goals + recent state but NO tasks -> route to beryllium
+7. Life goals + recent state + tasks -> offer a daily recommendation, or ask what they'd like to do
+8. If the user says yes to a recommendation -> read all data (goals, last 10 states, last 2 days completed tasks, overdue recurring tasks, all incomplete one-time tasks) and synthesize a prioritized daily plan, then save it as a todo list
+
+IMPORTANT: Explicit user requests (rules 2-4) take priority over automatic routing (rules 5-6). If the user says "add a task" or "manage my tasks", route to beryllium even if a state check is overdue.
 
 ## When Making Recommendations
 Read everything: goals, recent states, completed tasks, overdue recurring tasks, incomplete tasks. Consider the user's energy level, soreness, sickness, cognitive load of tasks, deadlines, and goal priorities. Create a concrete ordered list of what to do today and why.
+
+When building a todo list, each item sourced from a task MUST include:
+- `source_task_id`: the task's database ID (int)
+- `source_type`: either `"one_time"` or `"recurring"`
+- `completed`: false (default)
+Items not sourced from either table should have `source_task_id` as null, `source_type` as null, and `completed` as false.
+
+{states_section}
 
 ## Context Cache
 {context_hint}
@@ -71,18 +83,14 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
         return f"Routing to {agent_name}."
 
     life_goal_tools = make_life_goal_tools(user_id)
-    state_tools = make_state_tools(user_id)
     task_tools = make_task_tools(user_id)
     todo_tools = make_todo_tools(user_id)
     help_tools = make_help_tools()
 
-    # Hydrogen gets read tools + route + todo creation
+    # Hydrogen gets read tools + route + todo creation (no state tools — states are in prompt)
     tools = [route_to_agent]
     for t in life_goal_tools:
         if t.name == "get_life_goals":
-            tools.append(t)
-    for t in state_tools:
-        if t.name == "get_recent_states":
             tools.append(t)
     for t in task_tools:
         if t.name == "get_tasks":
@@ -99,11 +107,18 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
     # Build context cache hint
     cache_hints = []
     for key, cached in context_cache.items():
+        if key == "recent_states":
+            continue  # States are shown in their own section
         cache_hints.append(f"- {key}: {str(cached['result'])[:300]}")
     context_hint = "\n".join(cache_hints) if cache_hints else "No cached data yet."
 
+    # Format states for prompt
+    states_section = format_states_for_prompt(context_cache.get("recent_states", []))
+
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str, context_hint=context_hint)
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        now=now_str, context_hint=context_hint, states_section=states_section
+    )
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
     num_input_messages = len(call_messages)
@@ -146,7 +161,7 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
                     on_event("tool_end", {"tool": tc["name"], "agent": "hydrogen"})
                 result_str = str(result)
                 # Cache read-only tool results
-                if tc["name"] in ("get_life_goals", "get_recent_states", "get_tasks"):
+                if tc["name"] in ("get_life_goals", "get_tasks"):
                     context_cache[tc["name"]] = {"result": result_str, "timestamp": now_str}
                 tool_msg = ToolMessage(content=result_str, tool_call_id=tc["id"])
                 call_messages.append(tool_msg)

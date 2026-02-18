@@ -57,6 +57,12 @@ async function pickSession(sid) {
   await chat.switchSession(sid)
   showSessionMenu.value = false
 }
+
+async function removeSession(sid) {
+  if (confirm('Delete this chat session?')) {
+    await chat.deleteSession(sid)
+  }
+}
 </script>
 
 <template>
@@ -93,8 +99,11 @@ async function pickSession(sid) {
           :class="{ active: chat.sessionId === s.session_id }"
           @click="pickSession(s.session_id)"
         >
-          <span>{{ s.session_id }}</span>
-          <span class="session-meta">{{ s.message_count }} msgs</span>
+          <span class="session-label">{{ s.session_id }}</span>
+          <span class="session-actions">
+            <span class="session-meta">{{ s.message_count }} msgs</span>
+            <button class="session-del-btn" @click.stop="removeSession(s.session_id)" title="Delete session">&#x2715;</button>
+          </span>
         </div>
       </div>
     </div>
@@ -238,9 +247,40 @@ async function pickSession(sid) {
   color: var(--accent);
   font-weight: 600;
 }
+.session-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.session-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
 .session-meta {
   font-size: 11px;
   color: var(--text-muted);
+}
+.session-del-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  line-height: 1;
+  opacity: 0;
+}
+.session-item:hover .session-del-btn {
+  opacity: 0.7;
+}
+.session-del-btn:hover {
+  opacity: 1 !important;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
 }
 .messages {
   flex: 1;

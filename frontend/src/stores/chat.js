@@ -17,8 +17,9 @@ export const useChatStore = defineStore('chat', () => {
 
   async function loadHistory() {
     try {
-      const params = sessionId.value !== 'default' ? { session_id: sessionId.value } : {}
-      const res = await client.get('/chat/history', { params })
+      const res = await client.get('/chat/history', {
+        params: { session_id: sessionId.value }
+      })
       messages.value = (res.data.items || []).map(item => ({
         id: item.id,
         role: item.data?.role || 'assistant',
@@ -67,7 +68,21 @@ export const useChatStore = defineStore('chat', () => {
     activeAgentLabel.value = 'Hydrogen (Manager)'
   }
 
+  async function deleteSession(sid) {
+    await client.delete('/chat/history', {
+      params: { session_id: sid }
+    })
+    // If we just deleted the active session, switch to default
+    if (sessionId.value === sid) {
+      sessionId.value = 'default'
+      await loadHistory()
+      await loadActiveAgent()
+    }
+    await loadSessions()
+  }
+
   async function sendMessage(text) {
+    const isFirstMessage = messages.value.length === 0
     messages.value.push({ role: 'user', content: text, id: Date.now() })
     sending.value = true
     try {
@@ -84,6 +99,7 @@ export const useChatStore = defineStore('chat', () => {
       })
       activeAgent.value = res.data.active_agent || 'hydrogen'
       activeAgentLabel.value = res.data.active_agent_label || 'Hydrogen (Manager)'
+      if (isFirstMessage) loadSessions()
       return res.data
     } catch (err) {
       messages.value.push({
@@ -97,11 +113,13 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function sendMessageStream(text) {
+    const isFirstMessage = messages.value.length === 0
     messages.value.push({ role: 'user', content: text, id: Date.now() })
     sending.value = true
     streaming.value = true
     streamingContent.value = ''
     toolStatus.value = null
+    let gotDone = false
 
     try {
       const response = await fetch('/api/chat/stream', {
@@ -122,6 +140,21 @@ export const useChatStore = defineStore('chat', () => {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      // eventType persists across chunks so split SSE events are handled
+      let eventType = null
+
+      function processLine(line) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ') && eventType) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            handleSSEEvent(eventType, data)
+            if (eventType === 'done') gotDone = true
+          } catch { /* skip malformed data */ }
+          eventType = null
+        }
+      }
 
       while (true) {
         const { done, value } = await reader.read()
@@ -129,35 +162,29 @@ export const useChatStore = defineStore('chat', () => {
 
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
-        // Keep the last potentially incomplete line in the buffer
         buffer = lines.pop()
 
-        let eventType = null
         for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim()
-          } else if (line.startsWith('data: ') && eventType) {
-            const data = JSON.parse(line.slice(6))
-            handleSSEEvent(eventType, data)
-            eventType = null
-          }
+          processLine(line)
         }
       }
 
       // Process any remaining buffer
       if (buffer.trim()) {
         const lines = buffer.split('\n')
-        let eventType = null
         for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim()
-          } else if (line.startsWith('data: ') && eventType) {
-            const data = JSON.parse(line.slice(6))
-            handleSSEEvent(eventType, data)
-            eventType = null
-          }
+          processLine(line)
         }
       }
+
+      // Fallback: if the done event was dropped (split across chunks and lost),
+      // recover by loading the response from the server
+      if (!gotDone) {
+        await loadHistory()
+        await loadActiveAgent()
+      }
+
+      if (isFirstMessage) loadSessions()
     } catch (err) {
       messages.value.push({
         role: 'assistant',
@@ -235,6 +262,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value = []
     activeAgent.value = 'hydrogen'
     activeAgentLabel.value = 'Hydrogen (Manager)'
+    loadSessions()
   }
 
   return {
@@ -242,7 +270,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionId, sessions,
     streaming, streamingContent, toolStatus,
     loadHistory, loadSessions, loadActiveAgent,
-    switchSession, newSession,
+    switchSession, newSession, deleteSession,
     sendMessage, sendMessageStream, deleteMessage, clearHistory,
   }
 })

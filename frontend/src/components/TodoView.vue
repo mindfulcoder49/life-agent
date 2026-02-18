@@ -16,6 +16,19 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+async function completeItem(todoId, itemIndex, todo) {
+  try {
+    const res = await client.post(`/todo-lists/${todoId}/complete-item`, { item_index: itemIndex })
+    // Update local state from server response
+    todo.data = res.data.data
+  } catch {
+    // Optimistic fallback: mark completed locally even if request fails
+    if (todo.data?.items?.[itemIndex]) {
+      todo.data.items[itemIndex].completed = true
+    }
+  }
+}
 </script>
 
 <template>
@@ -33,7 +46,13 @@ onMounted(async () => {
         </div>
         <p v-if="todo.data?.reasoning" class="reasoning">{{ todo.data.reasoning }}</p>
         <div v-if="todo.data?.items?.length" class="todo-items">
-          <TodoItem v-for="(item, idx) in todo.data.items" :key="idx" :item="item" />
+          <TodoItem
+            v-for="(item, idx) in todo.data.items"
+            :key="idx"
+            :item="item"
+            :completed="!!item.completed"
+            @complete="completeItem(todo.id, idx, todo)"
+          />
         </div>
         <p v-if="todo.data?.agent_notes" class="agent-notes">{{ todo.data.agent_notes }}</p>
       </div>

@@ -15,6 +15,7 @@ from agents.hydrogen import run_hydrogen
 from agents.helium import run_helium
 from agents.lithium import run_lithium
 from agents.beryllium import run_beryllium
+from agents.tools.state_tools import fetch_recent_states
 
 AGENT_RUNNERS = {
     "hydrogen": run_hydrogen,
@@ -66,7 +67,7 @@ def create_graph_runner():
         return None
 
     def list_sessions(user_id: int) -> list[dict]:
-        """List chat sessions for a user from the DB."""
+        """List chat sessions for a user from the DB (excludes 'default' which is shown separately in UI)."""
         conn = get_db()
         rows = conn.execute("""
             SELECT json_extract(data, '$.session_id') as sid,
@@ -75,6 +76,7 @@ def create_graph_runner():
                    COUNT(*) as msg_count
             FROM chat_contexts
             WHERE json_extract(data, '$.user_id') = ?
+              AND json_extract(data, '$.session_id') != 'default'
             GROUP BY json_extract(data, '$.session_id')
             ORDER BY MAX(created_at) DESC
         """, (user_id,)).fetchall()
@@ -96,6 +98,11 @@ def create_graph_runner():
 
         active = state["active_agent"] or "hydrogen"
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        # Pre-fetch states into cache if not already present
+        if "recent_states" not in state["context_cache"]:
+            state["context_cache"]["recent_states"] = fetch_recent_states(user_id)
+
         logger.info(f"[user={user_id}|{session_id}] >>> Active: {active}")
 
         log_conversation_turn(user_id, session_id, "user", "input", message)

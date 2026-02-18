@@ -9,7 +9,7 @@ def make_todo_tools(user_id: int):
 
     @tool
     def create_todo_list(date: str, items: str, reasoning: str = "", agent_notes: str = "") -> str:
-        """Create a daily todo list for the user. items should be a JSON array of task objects with 'title', 'estimated_minutes', 'priority', and optional 'source_task_id'."""
+        """Create a daily todo list for the user. items should be a JSON array of task objects with 'title', 'estimated_minutes', 'priority', 'source_task_id' (int or null), 'source_type' ("one_time", "recurring", or null), and 'completed' (default false)."""
         try:
             items_list = json.loads(items) if isinstance(items, str) else items
         except json.JSONDecodeError:

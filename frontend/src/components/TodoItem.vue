@@ -1,7 +1,10 @@
 <script setup>
 const props = defineProps({
   item: [Object, String],
+  completed: { type: Boolean, default: false },
 })
+
+const emit = defineEmits(['complete'])
 
 function getTitle() {
   if (typeof props.item === 'string') return props.item
@@ -17,11 +20,21 @@ function getTime() {
   if (typeof props.item !== 'object' || !props.item) return null
   return props.item.time || props.item.estimated_minutes ? `~${props.item.estimated_minutes}min` : null
 }
+
+function isCompleted() {
+  return props.completed || (typeof props.item === 'object' && props.item?.completed)
+}
+
+function onCheckboxClick() {
+  if (!isCompleted()) {
+    emit('complete')
+  }
+}
 </script>
 
 <template>
-  <div class="todo-item">
-    <span class="checkbox">&#9744;</span>
+  <div class="todo-item" :class="{ 'todo-completed': isCompleted() }">
+    <span class="checkbox" @click="onCheckboxClick">{{ isCompleted() ? '☑' : '☐' }}</span>
     <div class="todo-content">
       <span class="todo-title">{{ getTitle() }}</span>
       <span v-if="getTime()" class="todo-time">{{ getTime() }}</span>
@@ -58,5 +71,13 @@ function getTime() {
   color: var(--text-secondary);
   font-size: 12px;
   margin-top: 2px;
+}
+.todo-completed .todo-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.todo-completed .checkbox {
+  color: var(--text-muted);
+  cursor: default;
 }
 </style>

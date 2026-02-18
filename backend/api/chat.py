@@ -77,11 +77,9 @@ def get_sessions(request: Request):
     return {"sessions": []}
 
 @router.get("/history")
-def get_history(request: Request, session_id: str = None):
+def get_history(request: Request, session_id: str = "default"):
     user = get_current_user(request)
-    filters = {"user_id": user["id"]}
-    if session_id:
-        filters["session_id"] = session_id
+    filters = {"user_id": user["id"], "session_id": session_id}
     rows = get_rows("chat_contexts", filters=filters, limit=200, order_desc=False)
     return {"items": rows}
 
@@ -96,19 +94,13 @@ def delete_message(request: Request, message_id: int):
     return {"ok": True}
 
 @router.delete("/history")
-def clear_history(request: Request, session_id: str = None):
+def clear_history(request: Request, session_id: str = "default"):
     user = get_current_user(request)
     conn = get_db()
-    if session_id:
-        conn.execute(
-            "DELETE FROM chat_contexts WHERE json_extract(data, '$.user_id') = ? AND json_extract(data, '$.session_id') = ?",
-            (user["id"], session_id)
-        )
-    else:
-        conn.execute(
-            "DELETE FROM chat_contexts WHERE json_extract(data, '$.user_id') = ?",
-            (user["id"],)
-        )
+    conn.execute(
+        "DELETE FROM chat_contexts WHERE json_extract(data, '$.user_id') = ? AND json_extract(data, '$.session_id') = ?",
+        (user["id"], session_id)
+    )
     conn.commit()
     conn.close()
     # Also reset in-memory conversation state
