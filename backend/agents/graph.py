@@ -15,6 +15,7 @@ from agents.hydrogen import run_hydrogen
 from agents.helium import run_helium
 from agents.lithium import run_lithium
 from agents.beryllium import run_beryllium
+from agents.boron import run_boron
 from agents.tools.state_tools import fetch_recent_states
 from agents.tools.life_goal_tools import fetch_life_goals
 
@@ -23,15 +24,17 @@ AGENT_RUNNERS = {
     "helium": run_helium,
     "lithium": run_lithium,
     "beryllium": run_beryllium,
+    "boron": run_boron,
 }
 
-SPECIALISTS = {"helium", "lithium", "beryllium"}
+SPECIALISTS = {"helium", "lithium", "beryllium", "boron"}
 
 AGENT_LABELS = {
     "hydrogen": "Hydrogen (Manager)",
     "helium": "Helium (Life Goals)",
     "lithium": "Lithium (State Check)",
     "beryllium": "Beryllium (Tasks)",
+    "boron": "Boron (Task Planning)",
 }
 
 

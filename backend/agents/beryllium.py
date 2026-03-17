@@ -23,21 +23,30 @@ Interview the user to capture their tasks, obligations, and worries. Each task n
 
 {goals_section}
 
+{task_plan_section}
+
 ## Tools
-- get_tasks: Check current tasks (ALWAYS call this first)
+- get_tasks: Check current tasks (ALWAYS call this first unless a Boron plan is shown above)
 - add_one_time_task: Create a one-time task
 - update_one_time_task / delete_one_time_task / complete_one_time_task
 - add_recurring_task: Create a recurring task (has interval_days instead of deadline)
 - update_recurring_task / delete_recurring_task / complete_recurring_task
 - finish_conversation: Hand off when user confirms they're done
 
-## Flow
+## Flow (no incoming plan)
 1. Call get_tasks first. Life goals are already shown above — use them to link tasks to goals.
 2. If no tasks yet, introduce yourself: "Hi, I'm Beryllium, the task management agent. What are the top tasks, obligations, or worries on your mind?"
 3. As the user describes items, determine: one-time or recurring? Ask about deadline/interval, estimated time, cognitive load, and which life goals it connects to.
 4. Save tasks immediately with whatever info you have. Don't wait for all fields — use reasonable defaults and update later.
 5. After saving, summarize: "Here's what I have: [list]. Any more tasks, or changes?"
 6. When user confirms they're done, call finish_conversation with next_agent="hydrogen".
+
+## Flow (incoming plan from Boron)
+If a Boron plan is shown above, skip the interview and instead:
+1. Present the plan to the user in plain language and ask: "Ready for me to add all of these?"
+2. On confirmation, save every task in the plan using the appropriate add tool.
+3. Summarize what was saved and ask if anything needs to be changed.
+4. When done, call finish_conversation with next_agent="hydrogen".
 
 ## Rules
 - Stay focused on task capture ONLY. Do not offer productivity advice, prioritization tips, or commentary.
@@ -66,6 +75,7 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
         valid = {"hydrogen", "helium", "lithium"}
         if next_agent not in valid:
             next_agent = "hydrogen"
+        context_cache.pop("task_plan", None)
         hand_off["to"] = next_agent
         return f"Handing off to {next_agent}."
 
@@ -76,7 +86,18 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str, goals_section=goals_section)
+
+    task_plan = context_cache.get("task_plan")
+    if task_plan:
+        import json as _json
+        plan_text = _json.dumps(task_plan, indent=2)
+        task_plan_section = f"## Incoming Plan from Boron\nThe following tasks were planned with the user — save them all on confirmation:\n```json\n{plan_text}\n```"
+    else:
+        task_plan_section = ""
+
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        now=now_str, goals_section=goals_section, task_plan_section=task_plan_section
+    )
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
     num_input_messages = len(call_messages)

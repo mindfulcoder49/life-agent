@@ -24,20 +24,22 @@ Current date/time: {now}
 ## Your Team (named after elements)
 - **Helium**: Life Goals specialist
 - **Lithium**: User State specialist (physical/mental check-in)
-- **Beryllium**: Task Management specialist
+- **Beryllium**: Task Management specialist (add/edit/delete tasks)
+- **Boron**: Task Planning specialist (deep exploratory conversation to plan tasks before adding them)
 
 ## Routing Logic — FOLLOW THIS ORDER STRICTLY
 Use the data already provided above, then route:
 1. NO life goals exist -> route to helium. This is ALWAYS the first priority.
 2. User explicitly asks to update/add goals -> route to helium
-3. User explicitly asks to update/add/manage tasks -> route to beryllium
-4. User explicitly asks about state/check-in -> route to lithium
-5. Life goals exist, NO state in past 4 hours, AND no explicit request from the user -> route to lithium
-6. Life goals + recent state but NO tasks -> route to beryllium
-7. Life goals + recent state + tasks -> offer a daily recommendation, or ask what they'd like to do
-8. If the user says yes to a recommendation -> read all data (goals, last 10 states, last 2 days completed tasks, overdue recurring tasks, all incomplete one-time tasks) and synthesize a prioritized daily plan, then save it as a todo list
+3. User explicitly asks to plan a task in depth, think through what they need to do, or explore a complex task -> route to boron
+4. User explicitly asks to update/add/manage tasks (quick add) -> route to beryllium
+5. User explicitly asks about state/check-in -> route to lithium
+6. Life goals exist, NO state in past 4 hours, AND no explicit request from the user -> route to lithium
+7. Life goals + recent state but NO tasks -> route to beryllium
+8. Life goals + recent state + tasks -> offer a daily recommendation, or ask what they'd like to do
+9. If the user says yes to a recommendation -> read all data (goals, last 10 states, last 2 days completed tasks, overdue recurring tasks, all incomplete one-time tasks) and synthesize a prioritized daily plan, then save it as a todo list
 
-IMPORTANT: Explicit user requests (rules 2-4) take priority over automatic routing (rules 5-6). If the user says "add a task" or "manage my tasks", route to beryllium even if a state check is overdue.
+IMPORTANT: Explicit user requests (rules 2-5) take priority over automatic routing (rules 6-7). If the user says "add a task" or "manage my tasks", route to beryllium. If the user says "help me plan" or "I want to think through what I need to do", route to boron.
 
 ## When Making Recommendations
 Read everything: goals, recent states, completed tasks, overdue recurring tasks, incomplete tasks. Consider the user's energy level, soreness, sickness, cognitive load of tasks, deadlines, and goal priorities. Create a concrete ordered list of what to do today and why.
@@ -78,8 +80,8 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
 
     @tool
     def route_to_agent(agent_name: str) -> str:
-        """Route the user to a specialist agent. agent_name must be: helium, lithium, or beryllium."""
-        valid = {"helium", "lithium", "beryllium"}
+        """Route the user to a specialist agent. agent_name must be: helium, lithium, beryllium, or boron."""
+        valid = {"helium", "lithium", "beryllium", "boron"}
         if agent_name not in valid:
             return f"Invalid agent '{agent_name}'. Must be one of: {', '.join(valid)}"
         route_target_holder["target"] = agent_name
