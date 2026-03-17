@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.task_tools import make_task_tools
+from agents.tools.life_goal_tools import format_goals_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
@@ -20,9 +21,10 @@ Current date/time: {now}
 ## Purpose
 Interview the user to capture their tasks, obligations, and worries. Each task needs: title, description, whether it's one-time or recurring, estimated time, cognitive load (1-10 = how much not doing it weighs on their mind), deadline (for one-time), interval in days (for recurring), and which life goals it connects to.
 
+{goals_section}
+
 ## Tools
 - get_tasks: Check current tasks (ALWAYS call this first)
-- get_life_goals: See life goals to link tasks to (call this early so you can reference them)
 - add_one_time_task: Create a one-time task
 - update_one_time_task / delete_one_time_task / complete_one_time_task
 - add_recurring_task: Create a recurring task (has interval_days instead of deadline)
@@ -30,7 +32,7 @@ Interview the user to capture their tasks, obligations, and worries. Each task n
 - finish_conversation: Hand off when user confirms they're done
 
 ## Flow
-1. Call get_tasks and get_life_goals first.
+1. Call get_tasks first. Life goals are already shown above — use them to link tasks to goals.
 2. If no tasks yet, introduce yourself: "Hi, I'm Beryllium, the task management agent. What are the top tasks, obligations, or worries on your mind?"
 3. As the user describes items, determine: one-time or recurring? Ask about deadline/interval, estimated time, cognitive load, and which life goals it connects to.
 4. Save tasks immediately with whatever info you have. Don't wait for all fields — use reasonable defaults and update later.
@@ -56,7 +58,7 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
     api_key = get_api_key(user_id)
     hand_off = {"to": None}
 
-    base_tools = make_task_tools(user_id)
+    base_tools = make_task_tools(user_id, context_cache)
 
     @tool
     def finish_conversation(next_agent: str = "hydrogen", summary: str = "") -> str:
@@ -73,7 +75,8 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
     tool_map = {t.name: t for t in tools}
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str)
+    goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str, goals_section=goals_section)
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
     num_input_messages = len(call_messages)

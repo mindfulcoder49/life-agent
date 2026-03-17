@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, HTTPException
 from models import LifeGoalCreate, DataUpdate
 from auth import get_current_user
 from database import insert_row, get_row, get_rows, update_row, delete_row, count_rows
+from api.chat import graph_runner
 
 router = APIRouter(prefix="/api/life-goals", tags=["life_goals"])
 
@@ -17,6 +18,8 @@ def create_goal(request: Request, body: LifeGoalCreate):
     user = get_current_user(request)
     data = {"user_id": user["id"], **body.model_dump()}
     row_id = insert_row("life_goals", data)
+    if graph_runner and hasattr(graph_runner, "invalidate_goals_cache"):
+        graph_runner.invalidate_goals_cache(user["id"])
     return get_row("life_goals", row_id)
 
 @router.get("/{goal_id}")
@@ -36,6 +39,8 @@ def update_goal(request: Request, goal_id: int, body: DataUpdate):
     merged = {**row["data"], **body.data}
     merged["user_id"] = user["id"]
     update_row("life_goals", goal_id, merged)
+    if graph_runner and hasattr(graph_runner, "invalidate_goals_cache"):
+        graph_runner.invalidate_goals_cache(user["id"])
     return get_row("life_goals", goal_id)
 
 @router.delete("/{goal_id}")
@@ -45,4 +50,6 @@ def delete_goal(request: Request, goal_id: int):
     if not row or row["data"].get("user_id") != user["id"]:
         raise HTTPException(status_code=404, detail="Not found")
     delete_row("life_goals", goal_id)
+    if graph_runner and hasattr(graph_runner, "invalidate_goals_cache"):
+        graph_runner.invalidate_goals_cache(user["id"])
     return {"ok": True}

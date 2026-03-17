@@ -3,8 +3,10 @@ from database import insert_row, update_row, delete_row, get_rows, get_row
 import json
 
 
-def make_task_tools(user_id: int):
+def make_task_tools(user_id: int, context_cache: dict = None):
     """Create task management tools bound to a specific user_id."""
+    if context_cache is None:
+        context_cache = {}
 
     @tool
     def add_one_time_task(
@@ -165,8 +167,11 @@ def make_task_tools(user_id: int):
     @tool
     def get_life_goals() -> str:
         """Get all life goals for the current user. Useful for linking tasks to goals."""
+        if "life_goals" in context_cache:
+            return json.dumps(context_cache["life_goals"])
         rows = get_rows("life_goals", filters={"user_id": user_id}, limit=100)
         goals = [{"id": r["id"], **r["data"]} for r in rows]
+        context_cache["life_goals"] = goals
         return json.dumps(goals)
 
     return [

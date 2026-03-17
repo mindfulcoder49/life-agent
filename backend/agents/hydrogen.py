@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
-from agents.tools.life_goal_tools import make_life_goal_tools
+from agents.tools.life_goal_tools import make_life_goal_tools, format_goals_for_prompt
 from agents.tools.state_tools import format_states_for_prompt
 from agents.tools.task_tools import make_task_tools
 from agents.tools.todo_tools import make_todo_tools
@@ -27,7 +27,7 @@ Current date/time: {now}
 - **Beryllium**: Task Management specialist
 
 ## Routing Logic — FOLLOW THIS ORDER STRICTLY
-Use your tools to check the user's data, then route:
+Use the data already provided above, then route:
 1. NO life goals exist -> route to helium. This is ALWAYS the first priority.
 2. User explicitly asks to update/add goals -> route to helium
 3. User explicitly asks to update/add/manage tasks -> route to beryllium
@@ -48,6 +48,8 @@ When building a todo list, each item sourced from a task MUST include:
 - `completed`: false (default)
 Items not sourced from either table should have `source_task_id` as null, `source_type` as null, and `completed` as false.
 
+{goals_section}
+
 {states_section}
 
 ## Context Cache
@@ -58,6 +60,7 @@ Items not sourced from either table should have `source_task_id` as null, `sourc
 - Do NOT offer health advice, life coaching, or anything outside the system's purpose.
 - Do NOT re-introduce yourself or the team after the first interaction.
 - When routing, your response can be brief or empty — the specialist will greet the user.
+- Life goals and recent states are already provided above — do NOT call get_life_goals to make routing decisions.
 - If you already have recent data from the context cache, do NOT call those tools again — use the cached info to make your routing decision."""
 
 
@@ -82,16 +85,14 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
         route_target_holder["target"] = agent_name
         return f"Routing to {agent_name}."
 
-    life_goal_tools = make_life_goal_tools(user_id)
-    task_tools = make_task_tools(user_id)
+    life_goal_tools = make_life_goal_tools(user_id, context_cache)
+    task_tools = make_task_tools(user_id, context_cache)
     todo_tools = make_todo_tools(user_id)
     help_tools = make_help_tools()
 
-    # Hydrogen gets read tools + route + todo creation (no state tools — states are in prompt)
+    # Hydrogen gets route + get_tasks + todo creation + help
+    # (goals are pre-injected into the prompt — no need to call get_life_goals)
     tools = [route_to_agent]
-    for t in life_goal_tools:
-        if t.name == "get_life_goals":
-            tools.append(t)
     for t in task_tools:
         if t.name == "get_tasks":
             tools.append(t)
@@ -104,20 +105,21 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
     llm_with_tools = llm.bind_tools(tools)
     tool_map = {t.name: t for t in tools}
 
-    # Build context cache hint
+    # Build context cache hint (exclude data shown in dedicated sections)
     cache_hints = []
     for key, cached in context_cache.items():
-        if key == "recent_states":
-            continue  # States are shown in their own section
+        if key in ("recent_states", "life_goals"):
+            continue
         cache_hints.append(f"- {key}: {str(cached['result'])[:300]}")
     context_hint = "\n".join(cache_hints) if cache_hints else "No cached data yet."
 
-    # Format states for prompt
+    goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
     states_section = format_states_for_prompt(context_cache.get("recent_states", []))
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        now=now_str, context_hint=context_hint, states_section=states_section
+        now=now_str, context_hint=context_hint,
+        goals_section=goals_section, states_section=states_section
     )
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
@@ -160,9 +162,6 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
                 if on_event:
                     on_event("tool_end", {"tool": tc["name"], "agent": "hydrogen"})
                 result_str = str(result)
-                # Cache read-only tool results
-                if tc["name"] in ("get_life_goals", "get_tasks"):
-                    context_cache[tc["name"]] = {"result": result_str, "timestamp": now_str}
                 tool_msg = ToolMessage(content=result_str, tool_call_id=tc["id"])
                 call_messages.append(tool_msg)
                 context_log.append({

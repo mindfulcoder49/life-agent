@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
-from agents.tools.life_goal_tools import make_life_goal_tools
+from agents.tools.life_goal_tools import make_life_goal_tools, format_goals_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
@@ -20,15 +20,16 @@ Current date/time: {now}
 ## Purpose
 Interview the user to define their life goals. Each goal needs: title, description, priority (1-10), and stress (1-10). Priority = how important this goal is. Stress = how much not having achieved this goal weighs on them day-to-day.
 
+{goals_section}
+
 ## Tools
-- get_life_goals: Check current goals (ALWAYS call this first)
 - add_life_goal: Create a goal
 - update_life_goal: Modify a goal
 - delete_life_goal: Remove a goal
 - finish_conversation: Hand off when user confirms they're done
 
 ## Flow
-1. Call get_life_goals first.
+1. Review the current goals shown above.
 2. If this is the user's first time (no goals), say: "Hello! I'm Helium, the life goals agent. We're your agent team — all named after the elements. Today we'll start your onboarding. First, can you tell me your top life goals?"
 3. As the user shares goals, save them immediately — even with partial info. Use reasonable defaults (priority=5, stress=5) if the user hasn't specified. You can always update later.
 4. After storing goals, summarize: "Here are the life goals I have for you now: [list]. Do you want to add any or make any changes?"
@@ -53,7 +54,7 @@ def run_helium(user_id: int, messages: list, context_cache: dict = None, on_even
     hand_off = {"to": None}
 
     # Build tools
-    base_tools = make_life_goal_tools(user_id)
+    base_tools = make_life_goal_tools(user_id, context_cache)
 
     @tool
     def finish_conversation(next_agent: str = "hydrogen", summary: str = "") -> str:
@@ -70,7 +71,8 @@ def run_helium(user_id: int, messages: list, context_cache: dict = None, on_even
     tool_map = {t.name: t for t in tools}
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str)
+    goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str, goals_section=goals_section)
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
     num_input_messages = len(call_messages)

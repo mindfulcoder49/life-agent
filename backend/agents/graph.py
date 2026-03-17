@@ -16,6 +16,7 @@ from agents.helium import run_helium
 from agents.lithium import run_lithium
 from agents.beryllium import run_beryllium
 from agents.tools.state_tools import fetch_recent_states
+from agents.tools.life_goal_tools import fetch_life_goals
 
 AGENT_RUNNERS = {
     "hydrogen": run_hydrogen,
@@ -47,6 +48,12 @@ def create_graph_runner():
                 "context_cache": {},  # {tool_name: {result, timestamp}}
             }
         return sessions[key]
+
+    def invalidate_goals_cache(user_id: int):
+        """Clear cached life goals for all in-memory sessions belonging to this user."""
+        for key, session in sessions.items():
+            if key[0] == user_id:
+                session["context_cache"].pop("life_goals", None)
 
     def reset(user_id: int, session_id: str = None):
         if session_id:
@@ -99,9 +106,11 @@ def create_graph_runner():
         active = state["active_agent"] or "hydrogen"
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        # Pre-fetch states into cache if not already present
+        # Pre-fetch states and goals into cache if not already present
         if "recent_states" not in state["context_cache"]:
             state["context_cache"]["recent_states"] = fetch_recent_states(user_id)
+        if "life_goals" not in state["context_cache"]:
+            state["context_cache"]["life_goals"] = fetch_life_goals(user_id)
 
         logger.info(f"[user={user_id}|{session_id}] >>> Active: {active}")
 
@@ -274,4 +283,5 @@ def create_graph_runner():
     run.get_active_agent = get_active_agent
     run.list_sessions = list_sessions
     run.run_stream = run_stream
+    run.invalidate_goals_cache = invalidate_goals_cache
     return run
