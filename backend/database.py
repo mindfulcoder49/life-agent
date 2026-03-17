@@ -74,6 +74,40 @@ def init_db():
             updated_at TEXT
         );
     """)
+
+    # --- Indexes ---
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_sessions_token
+            ON sessions (json_extract(data, '$.session_token'));
+
+        CREATE INDEX IF NOT EXISTS idx_users_username
+            ON users (json_extract(data, '$.username'));
+
+        CREATE INDEX IF NOT EXISTS idx_chat_contexts_user_session
+            ON chat_contexts (json_extract(data, '$.user_id'), json_extract(data, '$.session_id'));
+
+        CREATE INDEX IF NOT EXISTS idx_one_time_tasks_user_completed
+            ON one_time_tasks (json_extract(data, '$.user_id'), json_extract(data, '$.completed'));
+
+        CREATE INDEX IF NOT EXISTS idx_recurring_tasks_user_active
+            ON recurring_tasks (json_extract(data, '$.user_id'), json_extract(data, '$.active'));
+
+        CREATE INDEX IF NOT EXISTS idx_todo_lists_user_date
+            ON todo_lists (json_extract(data, '$.user_id'), json_extract(data, '$.date'));
+
+        CREATE INDEX IF NOT EXISTS idx_life_goals_user_id
+            ON life_goals (json_extract(data, '$.user_id'));
+
+        CREATE INDEX IF NOT EXISTS idx_user_states_user_id
+            ON user_states (json_extract(data, '$.user_id'));
+
+        CREATE INDEX IF NOT EXISTS idx_help_articles_slug
+            ON help_articles (json_extract(data, '$.slug'));
+
+        CREATE INDEX IF NOT EXISTS idx_logs_level
+            ON logs (json_extract(data, '$.level'));
+    """)
+
     # --- Migrations ---
     # Backfill session_id='default' on chat_contexts rows that don't have it
     conn.execute("""
