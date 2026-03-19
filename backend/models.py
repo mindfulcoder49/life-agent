@@ -22,9 +22,6 @@ class LifeGoalCreate(BaseModel):
     status: Optional[str] = "active"
 
 class UserStateCreate(BaseModel):
-    food: Optional[str] = ""
-    exercise: Optional[str] = ""
-    sleep: Optional[str] = ""
     energy: Optional[int] = 5
     soreness: Optional[int] = 1
     sickness: Optional[int] = 1
@@ -45,6 +42,15 @@ class RecurringTaskCreate(BaseModel):
     estimated_minutes: Optional[int] = None
     cognitive_load: Optional[int] = 5
     life_goal_ids: Optional[list[int]] = []
+    metric: Optional[dict] = None
+
+class RecurringCompleteRequest(BaseModel):
+    metric_value: Optional[str] = None
+    metric_notes: Optional[str] = None
+    est_calories: Optional[int] = None
+    est_protein_g: Optional[int] = None
+    est_carbs_g: Optional[int] = None
+    est_fat_g: Optional[int] = None
 
 class DataUpdate(BaseModel):
     data: dict

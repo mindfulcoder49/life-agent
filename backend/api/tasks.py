@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
-from models import OneTimeTaskCreate, RecurringTaskCreate, DataUpdate
+from typing import Optional
+from models import OneTimeTaskCreate, RecurringTaskCreate, RecurringCompleteRequest, DataUpdate
 from auth import get_current_user
 from database import insert_row, get_row, get_rows, update_row, delete_row, count_rows, _now
 
@@ -106,7 +107,7 @@ def delete_recurring(request: Request, task_id: int):
     return {"ok": True}
 
 @router.post("/recurring/{task_id}/complete")
-def complete_recurring(request: Request, task_id: int):
+def complete_recurring(request: Request, task_id: int, body: Optional[RecurringCompleteRequest] = None):
     user = get_current_user(request)
     row = get_row("recurring_tasks", task_id)
     if not row or row["data"].get("user_id") != user["id"]:
@@ -116,7 +117,6 @@ def complete_recurring(request: Request, task_id: int):
         "user_id": user["id"],
         "title": recurring_data["title"],
         "description": recurring_data.get("description", ""),
-        "deadline": None,
         "estimated_minutes": recurring_data.get("estimated_minutes"),
         "cognitive_load": recurring_data.get("cognitive_load", 5),
         "life_goal_ids": recurring_data.get("life_goal_ids", []),
@@ -124,5 +124,20 @@ def complete_recurring(request: Request, task_id: int):
         "completed_at": _now(),
         "from_recurring_id": task_id,
     }
-    insert_row("one_time_tasks", one_time_data)
-    return {"ok": True, "message": "Recurring task completed, one-time record created"}
+    if recurring_data.get("metric"):
+        one_time_data["metric_snapshot"] = recurring_data["metric"]
+    if body:
+        if body.metric_value is not None:
+            one_time_data["metric_value"] = body.metric_value
+        if body.metric_notes is not None:
+            one_time_data["metric_notes"] = body.metric_notes
+        if body.est_calories is not None:
+            one_time_data["est_calories"] = body.est_calories
+        if body.est_protein_g is not None:
+            one_time_data["est_protein_g"] = body.est_protein_g
+        if body.est_carbs_g is not None:
+            one_time_data["est_carbs_g"] = body.est_carbs_g
+        if body.est_fat_g is not None:
+            one_time_data["est_fat_g"] = body.est_fat_g
+    completed_id = insert_row("one_time_tasks", one_time_data)
+    return {"ok": True, "completed_record_id": completed_id, "message": "Recurring task completed"}

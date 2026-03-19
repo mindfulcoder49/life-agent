@@ -1,6 +1,59 @@
 from langchain_core.tools import tool
-from database import insert_row, update_row, delete_row, get_rows, get_row
+from database import insert_row, update_row, delete_row, get_rows, get_row, get_db
+from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 import json
+
+
+def fetch_recent_metric_completions(user_id: int, days: int = 14) -> list[dict]:
+    """Fetch recent recurring task completions that have a metric_value logged."""
+    conn = get_db()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = conn.execute("""
+        SELECT * FROM one_time_tasks
+        WHERE json_extract(data, '$.user_id') = ?
+          AND json_extract(data, '$.from_recurring_id') IS NOT NULL
+          AND json_extract(data, '$.metric_value') IS NOT NULL
+          AND json_extract(data, '$.completed_at') >= ?
+        ORDER BY json_extract(data, '$.completed_at') DESC
+        LIMIT 200
+    """, (user_id, cutoff)).fetchall()
+    conn.close()
+    return [{"id": r["id"], "created_at": r["created_at"], **json.loads(r["data"])} for r in rows]
+
+
+def format_metrics_for_prompt(recent_completions: list[dict]) -> str:
+    """Format recent metric completions for injection into agent system prompts."""
+    if not recent_completions:
+        return "## Recent Metrics\nNo metric data logged yet."
+
+    groups = defaultdict(list)
+    for c in recent_completions:
+        snapshot = c.get("metric_snapshot") or {}
+        label = snapshot.get("label") or c.get("title", "Unknown")
+        groups[label].append(c)
+
+    lines = ["## Recent Metrics"]
+    for label, entries in sorted(groups.items()):
+        sorted_entries = sorted(entries, key=lambda x: x.get("completed_at", ""), reverse=True)[:5]
+        snapshot = sorted_entries[0].get("metric_snapshot") or {}
+        unit = snapshot.get("unit", "")
+        header = f"\n### {label}"
+        if unit:
+            header += f" ({unit})"
+        lines.append(header)
+        for e in sorted_entries:
+            val = e.get("metric_value", "")
+            ts = (e.get("completed_at") or "")[:10]
+            extra = ""
+            if e.get("est_calories"):
+                parts = [f"~{e['est_calories']} cal"]
+                if e.get("est_protein_g"):
+                    parts.append(f"{e['est_protein_g']}g protein")
+                extra = f" ({', '.join(parts)})"
+            lines.append(f"- [{ts}] {val}{extra}")
+
+    return "\n".join(lines)
 
 
 def make_task_tools(user_id: int, context_cache: dict = None):
@@ -70,7 +123,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             return json.dumps({"success": False, "message": "Task not found."})
         if row["data"].get("user_id") != user_id:
             return json.dumps({"success": False, "message": "You do not own this task."})
-        merged = {**row["data"], "completed": True}
+        merged = {**row["data"], "completed": True, "completed_at": datetime.now(timezone.utc).isoformat()}
         update_row("one_time_tasks", task_id, merged)
         return json.dumps({"success": True, "message": f"Task {task_id} marked as completed."})
 
@@ -82,12 +135,19 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         estimated_minutes: int = 0,
         cognitive_load: int = 5,
         life_goal_ids: str = "[]",
+        metric: str = "",
     ) -> str:
-        """Add a recurring task. interval_days is how often it repeats. life_goal_ids is a JSON array of goal IDs."""
+        """Add a recurring task. interval_days is how often it repeats. life_goal_ids is a JSON array of goal IDs. metric is an optional JSON object: {"label": "...", "unit": "...", "value_type": "number"|"text"|"meal"}"""
         try:
             goal_ids = json.loads(life_goal_ids) if isinstance(life_goal_ids, str) else life_goal_ids
         except json.JSONDecodeError:
             goal_ids = []
+        metric_data = None
+        if metric:
+            try:
+                metric_data = json.loads(metric) if isinstance(metric, str) else metric
+            except json.JSONDecodeError:
+                pass
         data = {
             "user_id": user_id,
             "title": title,
@@ -98,6 +158,8 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             "life_goal_ids": goal_ids,
             "active": True,
         }
+        if metric_data:
+            data["metric"] = metric_data
         row_id = insert_row("recurring_tasks", data)
         return json.dumps({"success": True, "id": row_id, "message": f"Recurring task '{title}' created."})
 
@@ -129,8 +191,16 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         return json.dumps({"success": True, "message": f"Recurring task {task_id} deleted."})
 
     @tool
-    def complete_recurring_task(task_id: int) -> str:
-        """Mark a recurring task as completed for this cycle. Creates a completed one-time record."""
+    def complete_recurring_task(
+        task_id: int,
+        metric_value: str = "",
+        metric_notes: str = "",
+        est_calories: int = 0,
+        est_protein_g: int = 0,
+        est_carbs_g: int = 0,
+        est_fat_g: int = 0,
+    ) -> str:
+        """Mark a recurring task as completed for this cycle. If the task has a metric, pass metric_value. For meal-type metrics, also pass est_calories, est_protein_g, est_carbs_g, est_fat_g."""
         row = get_row("recurring_tasks", task_id)
         if not row:
             return json.dumps({"success": False, "message": "Recurring task not found."})
@@ -140,12 +210,27 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             "user_id": user_id,
             "title": row["data"]["title"],
             "description": row["data"].get("description", ""),
-            "source_recurring_task_id": task_id,
+            "from_recurring_id": task_id,
             "completed": True,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
             "life_goal_ids": row["data"].get("life_goal_ids", []),
             "cognitive_load": row["data"].get("cognitive_load", 5),
             "estimated_minutes": row["data"].get("estimated_minutes", 0),
         }
+        if row["data"].get("metric"):
+            completed_data["metric_snapshot"] = row["data"]["metric"]
+        if metric_value:
+            completed_data["metric_value"] = metric_value
+        if metric_notes:
+            completed_data["metric_notes"] = metric_notes
+        if est_calories:
+            completed_data["est_calories"] = est_calories
+        if est_protein_g:
+            completed_data["est_protein_g"] = est_protein_g
+        if est_carbs_g:
+            completed_data["est_carbs_g"] = est_carbs_g
+        if est_fat_g:
+            completed_data["est_fat_g"] = est_fat_g
         completed_id = insert_row("one_time_tasks", completed_data)
         return json.dumps({
             "success": True,

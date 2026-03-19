@@ -73,6 +73,12 @@ def init_db():
             created_at TEXT,
             updated_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS weekly_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            created_at TEXT,
+            updated_at TEXT
+        );
     """)
 
     # --- Indexes ---
@@ -106,6 +112,9 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_logs_level
             ON logs (json_extract(data, '$.level'));
+
+        CREATE INDEX IF NOT EXISTS idx_weekly_reviews_user_id
+            ON weekly_reviews (json_extract(data, '$.user_id'));
     """)
 
     # --- Migrations ---
@@ -201,3 +210,4 @@ def _row_to_dict(row) -> dict:
     except (json.JSONDecodeError, TypeError):
         pass
     return d
+

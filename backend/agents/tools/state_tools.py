@@ -10,21 +10,17 @@ def fetch_recent_states(user_id: int, limit: int = 5) -> list[dict]:
 
 
 def format_states_for_prompt(states: list[dict]) -> str:
-    """Format a list of state dicts into a readable section for system prompts."""
+    """Format a list of state dicts into a readable section for system prompts.
+    Only shows energy, soreness, sickness — meals/sleep/exercise are tracked as metrics."""
     if not states:
         return "## Recent States\nNo state check-ins recorded yet."
     lines = ["## Recent States"]
     for s in states:
-        parts = []
-        if s.get("food"):
-            parts.append(f"Food: {s['food']}")
-        if s.get("exercise"):
-            parts.append(f"Exercise: {s['exercise']}")
-        if s.get("sleep"):
-            parts.append(f"Sleep: {s['sleep']}")
-        parts.append(f"Energy: {s.get('energy', '?')}/10")
-        parts.append(f"Soreness: {s.get('soreness', '?')}/10")
-        parts.append(f"Sickness: {s.get('sickness', '?')}/10")
+        parts = [
+            f"Energy: {s.get('energy', '?')}/10",
+            f"Soreness: {s.get('soreness', '?')}/10",
+            f"Sickness: {s.get('sickness', '?')}/10",
+        ]
         if s.get("notes"):
             parts.append(f"Notes: {s['notes']}")
         timestamp = s.get("created_at", "unknown")
@@ -42,20 +38,14 @@ def make_state_tools(user_id: int, context_cache: dict = None):
 
     @tool
     def add_user_state(
-        food: str = "",
-        exercise: str = "",
-        sleep: str = "",
         energy: int = 5,
         soreness: int = 1,
         sickness: int = 1,
         notes: str = "",
     ) -> str:
-        """Record the user's current physical and mental state. Energy is 1-10, soreness and sickness are 1-10."""
+        """Record the user's current physical and mental state. Energy, soreness, and sickness are all 1-10 scales."""
         data = {
             "user_id": user_id,
-            "food": food,
-            "exercise": exercise,
-            "sleep": sleep,
             "energy": energy,
             "soreness": soreness,
             "sickness": sickness,
@@ -68,15 +58,12 @@ def make_state_tools(user_id: int, context_cache: dict = None):
     @tool
     def update_user_state(
         state_id: int,
-        food: str = None,
-        exercise: str = None,
-        sleep: str = None,
         energy: int = None,
         soreness: int = None,
         sickness: int = None,
         notes: str = None,
     ) -> str:
-        """Update an existing user state record. Provide state_id and only the fields you want to change. Use this to add fields to a state from this session instead of creating a new one."""
+        """Update an existing user state record. Provide state_id and only the fields you want to change."""
         row = get_row("user_states", state_id)
         if not row:
             return json.dumps({"success": False, "message": f"State {state_id} not found."})
@@ -84,9 +71,8 @@ def make_state_tools(user_id: int, context_cache: dict = None):
             return json.dumps({"success": False, "message": "Not your state."})
         existing = row["data"]
         updates = {
-            "food": food, "exercise": exercise, "sleep": sleep,
-            "energy": energy, "soreness": soreness, "sickness": sickness,
-            "notes": notes,
+            "energy": energy, "soreness": soreness,
+            "sickness": sickness, "notes": notes,
         }
         for key, value in updates.items():
             if value is not None:

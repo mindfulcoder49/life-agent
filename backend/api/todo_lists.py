@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Request, HTTPException
+from typing import Optional
 from pydantic import BaseModel
 from auth import get_current_user
-from database import get_rows, get_row, count_rows, get_db, insert_row, update_row, _now
+from database import get_rows, get_row, count_rows, get_db, insert_row, update_row, delete_row, _now
 import json
 
 router = APIRouter(prefix="/api/todo-lists", tags=["todo_lists"])
@@ -34,13 +35,14 @@ def get_by_date(request: Request, date: str):
 
 class CompleteItemRequest(BaseModel):
     item_index: int
+    metric_value: Optional[str] = None
+    metric_notes: Optional[str] = None
 
 
 @router.post("/{todo_id}/complete-item")
 def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
     user = get_current_user(request)
 
-    # Fetch and verify ownership
     row = get_row("todo_lists", todo_id)
     if not row or row["data"].get("user_id") != user["id"]:
         raise HTTPException(status_code=404, detail="Todo list not found")
@@ -56,16 +58,15 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
     source_task_id = item.get("source_task_id")
 
     if source_type == "one_time" and source_task_id:
-        # Complete the existing one-time task
         task_row = get_row("one_time_tasks", source_task_id)
         if task_row and task_row["data"].get("user_id") == user["id"]:
             task_data = task_row["data"]
             task_data["completed"] = True
             task_data["completed_at"] = _now()
             update_row("one_time_tasks", source_task_id, task_data)
+        item["completed_task_id"] = source_task_id
 
     elif source_type == "recurring" and source_task_id:
-        # Create a completed one-time record from the recurring task
         recurring_row = get_row("recurring_tasks", source_task_id)
         if recurring_row and recurring_row["data"].get("user_id") == user["id"]:
             recurring_data = recurring_row["data"]
@@ -81,10 +82,16 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
                 "completed_at": _now(),
                 "from_recurring_id": source_task_id,
             }
-            insert_row("one_time_tasks", one_time_data)
+            if recurring_data.get("metric"):
+                one_time_data["metric_snapshot"] = recurring_data["metric"]
+            if body.metric_value is not None:
+                one_time_data["metric_value"] = body.metric_value
+            if body.metric_notes is not None:
+                one_time_data["metric_notes"] = body.metric_notes
+            completed_id = insert_row("one_time_tasks", one_time_data)
+            item["completed_task_id"] = completed_id
 
     else:
-        # Ad-hoc item — create a new completed one-time task
         title = item.get("title") if isinstance(item, dict) else str(item)
         one_time_data = {
             "user_id": user["id"],
@@ -98,13 +105,61 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
             "completed_at": _now(),
             "from_recurring_id": None,
         }
-        insert_row("one_time_tasks", one_time_data)
+        completed_id = insert_row("one_time_tasks", one_time_data)
+        item["completed_task_id"] = completed_id
 
-    # Mark item as completed in the todo list
-    items[body.item_index] = item if isinstance(item, dict) else {"title": str(item)}
+    items[body.item_index] = item
     items[body.item_index]["completed"] = True
 
-    # Save updated todo list
+    updated_data = row["data"]
+    updated_data["items"] = items
+    update_row("todo_lists", todo_id, updated_data)
+
+    return get_row("todo_lists", todo_id)
+
+
+class UncompleteItemRequest(BaseModel):
+    item_index: int
+
+
+@router.post("/{todo_id}/uncomplete-item")
+def uncomplete_item(request: Request, todo_id: int, body: UncompleteItemRequest):
+    user = get_current_user(request)
+
+    row = get_row("todo_lists", todo_id)
+    if not row or row["data"].get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail="Todo list not found")
+
+    items = row["data"].get("items", [])
+    if body.item_index < 0 or body.item_index >= len(items):
+        raise HTTPException(status_code=400, detail="Invalid item index")
+
+    item = items[body.item_index]
+    if not isinstance(item, dict):
+        raise HTTPException(status_code=400, detail="Item is not completable")
+
+    source_type = item.get("source_type")
+    completed_task_id = item.get("completed_task_id")
+
+    if completed_task_id:
+        if source_type == "one_time":
+            # Revert the existing task to incomplete
+            task_row = get_row("one_time_tasks", completed_task_id)
+            if task_row and task_row["data"].get("user_id") == user["id"]:
+                task_data = task_row["data"]
+                task_data["completed"] = False
+                task_data["completed_at"] = None
+                update_row("one_time_tasks", completed_task_id, task_data)
+        else:
+            # For recurring and ad-hoc, we created the record — delete it
+            task_row = get_row("one_time_tasks", completed_task_id)
+            if task_row and task_row["data"].get("user_id") == user["id"]:
+                delete_row("one_time_tasks", completed_task_id)
+
+    item["completed"] = False
+    item.pop("completed_task_id", None)
+    items[body.item_index] = item
+
     updated_data = row["data"]
     updated_data["items"] = items
     update_row("todo_lists", todo_id, updated_data)

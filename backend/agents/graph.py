@@ -18,6 +18,8 @@ from agents.beryllium import run_beryllium
 from agents.boron import run_boron
 from agents.tools.state_tools import fetch_recent_states
 from agents.tools.life_goal_tools import fetch_life_goals
+from agents.tools.task_tools import fetch_recent_metric_completions
+from agents.tools.review_tools import fetch_last_weekly_review
 
 AGENT_RUNNERS = {
     "hydrogen": run_hydrogen,
@@ -33,8 +35,8 @@ AGENT_LABELS = {
     "hydrogen": "Hydrogen (Manager)",
     "helium": "Helium (Life Goals)",
     "lithium": "Lithium (State Check)",
-    "beryllium": "Beryllium (Tasks)",
-    "boron": "Boron (Task Planning)",
+    "beryllium": "Beryllium (Tasks & Metrics)",
+    "boron": "Boron (Weekly Review)",
 }
 
 
@@ -57,6 +59,12 @@ def create_graph_runner():
         for key, session in sessions.items():
             if key[0] == user_id:
                 session["context_cache"].pop("life_goals", None)
+
+    def invalidate_metrics_cache(user_id: int):
+        """Clear cached recent metrics for all in-memory sessions belonging to this user."""
+        for key, session in sessions.items():
+            if key[0] == user_id:
+                session["context_cache"].pop("recent_metrics", None)
 
     def reset(user_id: int, session_id: str = None):
         if session_id:
@@ -109,11 +117,15 @@ def create_graph_runner():
         active = state["active_agent"] or "hydrogen"
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        # Pre-fetch states and goals into cache if not already present
+        # Pre-fetch states, goals, and metrics into cache if not already present
         if "recent_states" not in state["context_cache"]:
             state["context_cache"]["recent_states"] = fetch_recent_states(user_id)
         if "life_goals" not in state["context_cache"]:
             state["context_cache"]["life_goals"] = fetch_life_goals(user_id)
+        if "recent_metrics" not in state["context_cache"]:
+            state["context_cache"]["recent_metrics"] = fetch_recent_metric_completions(user_id)
+        if "last_weekly_review" not in state["context_cache"]:
+            state["context_cache"]["last_weekly_review"] = fetch_last_weekly_review(user_id)
 
         logger.info(f"[user={user_id}|{session_id}] >>> Active: {active}")
 
@@ -287,4 +299,5 @@ def create_graph_runner():
     run.list_sessions = list_sessions
     run.run_stream = run_stream
     run.invalidate_goals_cache = invalidate_goals_cache
+    run.invalidate_metrics_cache = invalidate_metrics_cache
     return run

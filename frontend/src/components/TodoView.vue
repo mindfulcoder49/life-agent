@@ -5,11 +5,22 @@ import TodoItem from './TodoItem.vue'
 
 const todos = ref([])
 const loading = ref(true)
+const recurringMetrics = ref({}) // task_id -> metric object
 
 onMounted(async () => {
   try {
-    const res = await client.get('/todo-lists', { params: { limit: 20 } })
-    todos.value = res.data.items || []
+    const [todosRes, recurringRes] = await Promise.all([
+      client.get('/todo-lists', { params: { limit: 20 } }),
+      client.get('/tasks/recurring', { params: { limit: 200 } }),
+    ])
+    todos.value = todosRes.data.items || []
+    const map = {}
+    for (const task of (recurringRes.data.items || [])) {
+      if (task.data?.metric) {
+        map[task.id] = task.data.metric
+      }
+    }
+    recurringMetrics.value = map
   } catch {
     todos.value = []
   } finally {
@@ -17,15 +28,31 @@ onMounted(async () => {
   }
 })
 
-async function completeItem(todoId, itemIndex, todo) {
+function getItemMetric(item) {
+  if (typeof item !== 'object' || item?.source_type !== 'recurring' || !item?.source_task_id) return null
+  return recurringMetrics.value[item.source_task_id] || null
+}
+
+async function completeItem(todoId, itemIndex, todo, metricValue) {
   try {
-    const res = await client.post(`/todo-lists/${todoId}/complete-item`, { item_index: itemIndex })
-    // Update local state from server response
+    const body = { item_index: itemIndex }
+    if (metricValue != null) body.metric_value = String(metricValue)
+    const res = await client.post(`/todo-lists/${todoId}/complete-item`, body)
     todo.data = res.data.data
   } catch {
-    // Optimistic fallback: mark completed locally even if request fails
     if (todo.data?.items?.[itemIndex]) {
       todo.data.items[itemIndex].completed = true
+    }
+  }
+}
+
+async function uncompleteItem(todoId, itemIndex, todo) {
+  try {
+    const res = await client.post(`/todo-lists/${todoId}/uncomplete-item`, { item_index: itemIndex })
+    todo.data = res.data.data
+  } catch {
+    if (todo.data?.items?.[itemIndex]) {
+      todo.data.items[itemIndex].completed = false
     }
   }
 }
@@ -51,7 +78,9 @@ async function completeItem(todoId, itemIndex, todo) {
             :key="idx"
             :item="item"
             :completed="!!item.completed"
-            @complete="completeItem(todo.id, idx, todo)"
+            :metric="getItemMetric(item)"
+            @complete="(val) => completeItem(todo.id, idx, todo, val)"
+            @uncomplete="uncompleteItem(todo.id, idx, todo)"
           />
         </div>
         <p v-if="todo.data?.agent_notes" class="agent-notes">{{ todo.data.agent_notes }}</p>

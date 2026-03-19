@@ -29,7 +29,7 @@ def seed_admin():
         "theme": "dark",
         "settings": {},
     }
-    insert_row("users", user_data)
+    admin_id = insert_row("users", user_data)
     log_info("system", "seed", "Admin user created")
 
 def seed_help_articles():
@@ -112,24 +112,29 @@ def seed_help_articles():
                 "# Tracking Your State\n\n"
                 "Your physical and mental state directly affects what you can realistically accomplish in a day. "
                 "Regular check-ins help the AI give better recommendations.\n\n"
-                "## What Gets Tracked\n\n"
-                "- **Food** — What you've eaten recently (free text)\n"
-                "- **Exercise** — Recent physical activity (free text)\n"
-                "- **Sleep** — Last night's duration and quality (free text)\n"
+                "## State Check-in (Lithium)\n\n"
+                "Lithium tracks your subjective daily state:\n\n"
                 "- **Energy (1-10)** — How much energy you have right now\n"
                 "- **Soreness (1-10)** — Physical discomfort level\n"
                 "- **Sickness (1-10)** — How sick you feel\n"
                 "- **Notes** — Anything else about how you're feeling\n\n"
-                "## How State Affects Recommendations\n\n"
+                "## Metrics Tracking (Beryllium)\n\n"
+                "Beryllium tracks measurable data as part of task completion:\n\n"
+                "- **Meals** — What you ate, with AI-estimated calories and macros\n"
+                "- **Sleep** — Hours of sleep\n"
+                "- **Exercise** — Workouts, runs, physical activity\n"
+                "- **Custom metrics** — Any measurable outcome attached to a recurring task\n\n"
+                "Log metrics by telling the chat agent (e.g. \"I had eggs and toast for breakfast\" or "
+                "\"I ran 3 miles this morning\"). Beryllium will complete the task and estimate nutrition for meals.\n\n"
+                "## How State and Metrics Affect Recommendations\n\n"
                 "- Low energy? The AI will suggest lighter, less cognitively demanding tasks\n"
                 "- High soreness? Physical tasks get deprioritized\n"
                 "- Feeling sick? The AI focuses on essentials only\n"
-                "- Well rested and energetic? Time for the hard stuff\n\n"
+                "- Metric trends inform goal progress and daily planning\n\n"
                 "## Check-in Frequency\n\n"
                 "Hydrogen will route you to Lithium for a state check-in if it's been more than 4 hours "
                 "since your last one. You can also request a check-in at any time by saying something like "
-                "\"I want to update how I'm feeling.\"\n\n"
-                "You don't need to provide every field — Lithium will save whatever you share and ask about the rest."
+                "\"I want to update how I'm feeling.\""
             ),
         },
         {
@@ -352,7 +357,6 @@ from api.tasks import router as tasks_router
 from api.todo_lists import router as todo_lists_router
 from api.admin import router as admin_router
 from api.help import router as help_router
-
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(users_router)

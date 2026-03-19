@@ -1,6 +1,7 @@
 """Lithium - User State Specialist Agent.
 
-Conducts multi-turn conversations to check in on the user's physical/mental state.
+Collects the three subjective wellbeing fields: energy, soreness, sickness.
+Meals, sleep, and exercise are tracked as metrics by Carbon.
 Uses MODEL_SMALL for cost efficiency.
 """
 
@@ -9,6 +10,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.state_tools import make_state_tools, format_states_for_prompt
+from agents.tools.task_tools import format_metrics_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
@@ -18,31 +20,32 @@ SYSTEM_PROMPT_TEMPLATE = """You are Lithium, the User State agent. You are part 
 Current date/time: {now}
 
 ## Purpose
-Interview the user to record their current physical/mental state. You need to collect: food (what they ate recently), exercise (recent activity), sleep (last night — duration and quality), energy (1-10), soreness (1-10), sickness (1-10), and any notes.
+Check in on the user's current subjective physical state. You collect exactly three fields: energy (1-10), soreness (1-10), and sickness (1-10). Meals, sleep hours, and exercise are tracked separately as metrics via task completion — do not ask about those here.
 
 {states_section}
 
+{metrics_section}
+
 ## Tools
 - add_user_state: Create a NEW state check-in (use only for genuinely new sessions)
-- update_user_state: Update an EXISTING state by ID — use this to add fields to a state you already created this session
+- update_user_state: Update an EXISTING state by ID — use this to correct a state you already created this session
 - finish_conversation: Hand off when user confirms they're done
 
 ## Flow
 1. Review the recent states shown above.
-2. If this is the user's first state check, introduce the concept: "Hi, I'm Lithium, the state check-in agent. I track how you're doing physically so we can make better task recommendations. Let me ask a few quick questions."
-3. Ask all questions at once in a single message: food, exercise, sleep (duration and quality), energy (1-10), soreness (1-10), sickness (1-10), and any notes.
-4. Save all data at once using add_user_state once the user responds. If the user provides partial info and you need to follow up, use update_user_state with the state ID — do NOT create duplicate states.
-5. Summarize what you saved: "Here's your state: [summary]. Anything to add or change?"
+2. If this is the user's first state check, briefly introduce yourself: "Hi, I'm Lithium. Quick check-in — how are you feeling right now?"
+3. Ask all three questions at once in a single message: energy (1-10), soreness (1-10), and sickness (1-10). Include notes if there's anything else relevant.
+4. Save with add_user_state once the user responds. If you need to correct something, use update_user_state with the returned state ID — do NOT create duplicate states.
+5. Summarize: "Got it — energy {{X}}/10, soreness {{Y}}/10, sickness {{Z}}/10. Anything to change?"
 6. When the user confirms, call finish_conversation with next_agent="beryllium" (onboarding) or "hydrogen" (returning user).
 
 ## Rules
-- Stay focused on collecting state data ONLY. Do not offer health advice, tips, sleep recommendations, or any commentary beyond the check-in.
+- Ask ONLY about energy, soreness, and sickness. Do not ask about food, sleep, or exercise — those are logged via task completion.
+- Do not offer health advice, tips, or any commentary beyond the check-in.
 - Do not re-introduce yourself if you already have in this conversation.
 - Do not call finish_conversation until the user confirms.
-- Save all information at once after the user responds to your single-message question.
-- IMPORTANT: Only call add_user_state ONCE per check-in session. After the first save, always use update_user_state with the returned state ID to add more fields.
-- Be warm but efficient. Collect the data, save it, confirm, move on.
-- If the user has already provided information in earlier messages, use it — don't ask again."""
+- Only call add_user_state ONCE per check-in. After the first save, always use update_user_state.
+- Be warm but fast. This is a 2-message exchange."""
 
 
 def run_lithium(user_id: int, messages: list, context_cache: dict = None, on_event=None) -> dict:
@@ -73,7 +76,10 @@ def run_lithium(user_id: int, messages: list, context_cache: dict = None, on_eve
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     states_section = format_states_for_prompt(context_cache.get("recent_states", []))
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(now=now_str, states_section=states_section)
+    metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        now=now_str, states_section=states_section, metrics_section=metrics_section
+    )
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
     num_input_messages = len(call_messages)

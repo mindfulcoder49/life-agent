@@ -1,60 +1,83 @@
-"""Beryllium - Task Management Specialist Agent.
+"""Beryllium - Task and Metrics Agent.
 
-Conducts multi-turn conversations to help users organize tasks and obligations.
-Uses MODEL_SMALL for cost efficiency.
+Handles task management and metric logging as a unified agent.
+Every recurring task can have a metric attached — completing a task
+and logging its value happen as one action.
+Uses MODEL_BIG for nutrition estimation and reasoning quality.
 """
 
+import json as _json
 from datetime import datetime, timezone
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
-from agents.tools.task_tools import make_task_tools
+from agents.tools.task_tools import make_task_tools, format_metrics_for_prompt
 from agents.tools.life_goal_tools import format_goals_for_prompt
+from agents.tools.state_tools import format_states_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
 
-SYSTEM_PROMPT_TEMPLATE = """You are Beryllium, the Task Management agent. You are part of a team of agents named after the elements.
+SYSTEM_PROMPT_TEMPLATE = """You are Beryllium, the Task and Metrics agent. You are part of a team of agents named after the elements.
 
 Current date/time: {now}
 
 ## Purpose
-Interview the user to capture their tasks, obligations, and worries. Each task needs: title, description, whether it's one-time or recurring, estimated time, cognitive load (1-10 = how much not doing it weighs on their mind), deadline (for one-time), interval in days (for recurring), and which life goals it connects to.
+You handle two tightly coupled jobs:
+1. **Task management** — add, update, delete, and complete one-time and recurring tasks
+2. **Metric logging** — record values when recurring tasks are completed (meals, lifts, bodyweight, sleep, etc.)
+
+These are unified because every recurring task can have a metric attached. Completing a task and logging its metric happen as one action via complete_recurring_task.
 
 {goals_section}
 
+{states_section}
+
+{metrics_section}
 {task_plan_section}
-
 ## Tools
-- get_tasks: Check current tasks (ALWAYS call this first unless a Boron plan is shown above)
-- add_one_time_task: Create a one-time task
-- update_one_time_task / delete_one_time_task / complete_one_time_task
-- add_recurring_task: Create a recurring task (has interval_days instead of deadline)
-- update_recurring_task / delete_recurring_task / complete_recurring_task
-- finish_conversation: Hand off when user confirms they're done
+- get_tasks: Load current tasks — call this first if you don't have them
+- add_one_time_task / update_one_time_task / delete_one_time_task / complete_one_time_task
+- add_recurring_task: Include a metric JSON object if the task has a measurable outcome
+- update_recurring_task / delete_recurring_task
+- complete_recurring_task: Completes one cycle. If the task has a metric, pass metric_value. For meal-type metrics, estimate and pass est_calories, est_protein_g, est_carbs_g, est_fat_g.
+- finish_conversation: Hand off when done
 
-## Flow (no incoming plan)
-1. Call get_tasks first. Life goals are already shown above — use them to link tasks to goals.
-2. If no tasks yet, introduce yourself: "Hi, I'm Beryllium, the task management agent. What are the top tasks, obligations, or worries on your mind?"
-3. As the user describes items, determine: one-time or recurring? Ask about deadline/interval, estimated time, cognitive load, and which life goals it connects to.
-4. Save tasks immediately with whatever info you have. Don't wait for all fields — use reasonable defaults and update later.
-5. After saving, summarize: "Here's what I have: [list]. Any more tasks, or changes?"
-6. When user confirms they're done, call finish_conversation with next_agent="hydrogen".
+## Task capture (no incoming plan)
+1. Call get_tasks first.
+2. For each task: title, description, type (one-time or recurring), estimated minutes, cognitive load (1-10), deadline or interval, linked goals.
+3. For recurring tasks: if it has a measurable outcome, include a metric — e.g. `{{"label": "Bodyweight", "unit": "lbs", "value_type": "number"}}` or `{{"label": "Meal", "unit": "", "value_type": "meal"}}`.
+4. Save immediately with whatever info you have. Don't wait for all fields.
+5. Cognitive load: 1 = barely think about it, 10 = constantly on their mind.
+6. When done, call finish_conversation with next_agent="hydrogen".
 
-## Flow (incoming plan from Boron)
-If a Boron plan is shown above, skip the interview and instead:
-1. Present the plan to the user in plain language and ask: "Ready for me to add all of these?"
-2. On confirmation, save every task in the plan using the appropriate add tool.
-3. Summarize what was saved and ask if anything needs to be changed.
-4. When done, call finish_conversation with next_agent="hydrogen".
+## Incoming plan from Boron
+If a plan is shown above, skip the interview:
+1. Present the plan in plain language and ask: "Ready for me to add all of these?"
+2. On confirmation, save every task using the appropriate add tool.
+3. Summarize what was saved and ask if anything needs to change.
+4. Call finish_conversation with next_agent="hydrogen".
+
+## Metric logging
+When the user reports completing something with a metric, find the relevant recurring task and call complete_recurring_task with the value. Examples:
+- "I had eggs and toast for breakfast" → find Breakfast task → complete_recurring_task(task_id=X, metric_value="eggs and toast", est_calories=420, est_protein_g=22, est_carbs_g=38, est_fat_g=14)
+- "Weighed 185 this morning" → find Weigh yourself task → complete_recurring_task(task_id=X, metric_value="185")
+- "Squats 225x5, bench 185x5" → complete each lift task with metric_value in "weightxreps" format
+- "Slept 7.5 hours" → find Log sleep task → complete_recurring_task(task_id=X, metric_value="7.5")
+
+For meals: always estimate calories, protein, carbs, and fat. Rough is better than none.
+After logging: give a brief factual summary — "Logged breakfast: ~420 cal, ~22g protein."
+
+## Metric review
+When the user asks about trends or progress, summarize the Recent Metrics section above. Report what the numbers show — no coaching or interpretation beyond the data.
 
 ## Rules
-- Stay focused on task capture ONLY. Do not offer productivity advice, prioritization tips, or commentary.
-- Do not re-introduce yourself if you already have in this conversation.
-- Do not call finish_conversation until the user confirms.
-- Save partial information immediately. If user mentions "I need to do laundry", save it right away with what you know.
-- Be efficient. The user may dump multiple tasks at once — process them all.
-- Cognitive load: 1 = barely think about it, 10 = constantly on their mind."""
+- Do NOT offer coaching, advice, or commentary beyond task capture and factual metric summaries.
+- Do NOT re-introduce yourself if you already have in this conversation.
+- Do NOT call finish_conversation until the user confirms.
+- Save partial task information immediately.
+- For meal completions, always include nutrition estimates.
+- finish_conversation always routes back to hydrogen."""
 
 
 def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_event=None) -> dict:
@@ -80,23 +103,28 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
         return f"Handing off to {next_agent}."
 
     tools = base_tools + [finish_conversation]
-    llm = ChatOpenAI(model=config.MODEL_SMALL, api_key=api_key)
+    llm = ChatOpenAI(model=config.MODEL_BIG, api_key=api_key)
     llm_with_tools = llm.bind_tools(tools)
     tool_map = {t.name: t for t in tools}
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
+    states_section = format_states_for_prompt(context_cache.get("recent_states", []))
+    metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
 
     task_plan = context_cache.get("task_plan")
     if task_plan:
-        import json as _json
         plan_text = _json.dumps(task_plan, indent=2)
-        task_plan_section = f"## Incoming Plan from Boron\nThe following tasks were planned with the user — save them all on confirmation:\n```json\n{plan_text}\n```"
+        task_plan_section = f"\n## Incoming Plan from Boron\nThe following tasks were planned with the user — save them all on confirmation:\n```json\n{plan_text}\n```\n"
     else:
         task_plan_section = ""
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        now=now_str, goals_section=goals_section, task_plan_section=task_plan_section
+        now=now_str,
+        goals_section=goals_section,
+        states_section=states_section,
+        metrics_section=metrics_section,
+        task_plan_section=task_plan_section,
     )
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
@@ -104,7 +132,7 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
 
     context_log.append({"type": "system", "content": system_prompt, "agent": "beryllium"})
 
-    for i in range(10):
+    for i in range(20):
         logger.debug(f"[user={user_id}] Beryllium ReAct iteration {i}")
         if on_event:
             full_response = None
