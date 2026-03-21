@@ -47,7 +47,8 @@ These are unified because every recurring task can have a metric attached. Compl
 1. Call get_tasks first.
 2. For each task: title, description, type (one-time or recurring), estimated minutes, cognitive load (1-10), deadline or interval, linked goals.
 3. For recurring tasks: if it has a measurable outcome, include a metric — e.g. `{{"label": "Bodyweight", "unit": "lbs", "value_type": "number"}}` or `{{"label": "Meal", "unit": "", "value_type": "meal"}}`.
-4. Save immediately with whatever info you have. Don't wait for all fields.
+4. Set mandatory=True on a recurring task if it is directly essential for one of the user's life goals (e.g. daily nutrition logging for a muscle gain goal). Mandatory tasks are always auto-included in the daily todo list when due.
+5. Save immediately with whatever info you have. Don't wait for all fields.
 5. Cognitive load: 1 = barely think about it, 10 = constantly on their mind.
 6. When done, call finish_conversation with next_agent="hydrogen".
 
@@ -103,7 +104,8 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
         return f"Handing off to {next_agent}."
 
     tools = base_tools + [finish_conversation]
-    llm = ChatOpenAI(model=config.MODEL_BIG, api_key=api_key)
+    from runtime_config import get_agent_model
+    llm = ChatOpenAI(model=get_agent_model("beryllium"), api_key=api_key)
     llm_with_tools = llm.bind_tools(tools)
     tool_map = {t.name: t for t in tools}
 

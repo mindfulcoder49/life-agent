@@ -33,10 +33,15 @@ def get_by_date(request: Request, date: str):
     return d
 
 
+VALID_SECTIONS = {"items", "mandatory_items", "overdue_items"}
+
+
 class CompleteItemRequest(BaseModel):
     item_index: int
+    section: Optional[str] = "items"
     metric_value: Optional[str] = None
     metric_notes: Optional[str] = None
+    completion_date: Optional[str] = None  # YYYY-MM-DD, user's local date
 
 
 @router.post("/{todo_id}/complete-item")
@@ -47,7 +52,8 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
     if not row or row["data"].get("user_id") != user["id"]:
         raise HTTPException(status_code=404, detail="Todo list not found")
 
-    items = row["data"].get("items", [])
+    section = body.section if body.section in VALID_SECTIONS else "items"
+    items = row["data"].get(section, [])
     if body.item_index < 0 or body.item_index >= len(items):
         raise HTTPException(status_code=400, detail="Invalid item index")
 
@@ -57,12 +63,16 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
     source_type = item.get("source_type")
     source_task_id = item.get("source_task_id")
 
+    completed_at = _now()
+    completed_date = body.completion_date  # YYYY-MM-DD from client, or None
+
     if source_type == "one_time" and source_task_id:
         task_row = get_row("one_time_tasks", source_task_id)
         if task_row and task_row["data"].get("user_id") == user["id"]:
             task_data = task_row["data"]
             task_data["completed"] = True
-            task_data["completed_at"] = _now()
+            task_data["completed_at"] = completed_at
+            task_data["completed_date"] = completed_date
             update_row("one_time_tasks", source_task_id, task_data)
         item["completed_task_id"] = source_task_id
 
@@ -79,7 +89,8 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
                 "cognitive_load": recurring_data.get("cognitive_load", 5),
                 "life_goal_ids": recurring_data.get("life_goal_ids", []),
                 "completed": True,
-                "completed_at": _now(),
+                "completed_at": completed_at,
+                "completed_date": completed_date,
                 "from_recurring_id": source_task_id,
             }
             if recurring_data.get("metric"):
@@ -102,7 +113,8 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
             "cognitive_load": 5,
             "life_goal_ids": [],
             "completed": True,
-            "completed_at": _now(),
+            "completed_at": completed_at,
+            "completed_date": completed_date,
             "from_recurring_id": None,
         }
         completed_id = insert_row("one_time_tasks", one_time_data)
@@ -112,7 +124,7 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
     items[body.item_index]["completed"] = True
 
     updated_data = row["data"]
-    updated_data["items"] = items
+    updated_data[section] = items
     update_row("todo_lists", todo_id, updated_data)
 
     return get_row("todo_lists", todo_id)
@@ -120,6 +132,7 @@ def complete_item(request: Request, todo_id: int, body: CompleteItemRequest):
 
 class UncompleteItemRequest(BaseModel):
     item_index: int
+    section: Optional[str] = "items"
 
 
 @router.post("/{todo_id}/uncomplete-item")
@@ -130,7 +143,8 @@ def uncomplete_item(request: Request, todo_id: int, body: UncompleteItemRequest)
     if not row or row["data"].get("user_id") != user["id"]:
         raise HTTPException(status_code=404, detail="Todo list not found")
 
-    items = row["data"].get("items", [])
+    section = body.section if body.section in VALID_SECTIONS else "items"
+    items = row["data"].get(section, [])
     if body.item_index < 0 or body.item_index >= len(items):
         raise HTTPException(status_code=400, detail="Invalid item index")
 
@@ -161,7 +175,7 @@ def uncomplete_item(request: Request, todo_id: int, body: UncompleteItemRequest)
     items[body.item_index] = item
 
     updated_data = row["data"]
-    updated_data["items"] = items
+    updated_data[section] = items
     update_row("todo_lists", todo_id, updated_data)
 
     return get_row("todo_lists", todo_id)

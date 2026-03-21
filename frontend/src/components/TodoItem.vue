@@ -1,16 +1,29 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 const props = defineProps({
   item: [Object, String],
   completed: { type: Boolean, default: false },
   metric: { type: Object, default: null },
+  listDate: { type: String, default: null },
 })
 
 const emit = defineEmits(['complete', 'uncomplete'])
 
 const showMetricInput = ref(false)
+const showDateInput = ref(false)
 const metricValue = ref('')
+const pendingMetricValue = ref(null)
+const completionDate = ref('')
+
+function localToday() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+const needsDatePrompt = computed(() =>
+  props.listDate != null && props.listDate !== localToday()
+)
 
 function getTitle() {
   if (typeof props.item === 'string') return props.item
@@ -38,21 +51,44 @@ function onCheckboxClick() {
   }
   if (props.metric) {
     showMetricInput.value = true
+  } else if (needsDatePrompt.value) {
+    completionDate.value = props.listDate
+    showDateInput.value = true
   } else {
-    emit('complete', null)
+    emit('complete', { metricValue: null, completionDate: null })
   }
 }
 
 function submitMetric() {
-  emit('complete', metricValue.value || null)
+  pendingMetricValue.value = metricValue.value || null
   showMetricInput.value = false
   metricValue.value = ''
+  if (needsDatePrompt.value) {
+    completionDate.value = props.listDate
+    showDateInput.value = true
+  } else {
+    emit('complete', { metricValue: pendingMetricValue.value, completionDate: null })
+    pendingMetricValue.value = null
+  }
 }
 
 function skipMetric() {
-  emit('complete', null)
+  pendingMetricValue.value = null
   showMetricInput.value = false
   metricValue.value = ''
+  if (needsDatePrompt.value) {
+    completionDate.value = props.listDate
+    showDateInput.value = true
+  } else {
+    emit('complete', { metricValue: null, completionDate: null })
+  }
+}
+
+function submitDate() {
+  emit('complete', { metricValue: pendingMetricValue.value, completionDate: completionDate.value || null })
+  showDateInput.value = false
+  completionDate.value = ''
+  pendingMetricValue.value = null
 }
 </script>
 
@@ -77,6 +113,17 @@ function skipMetric() {
         />
         <button class="btn-done" @click="submitMetric">Done</button>
         <button class="btn-skip" @click="skipMetric">Skip</button>
+      </div>
+      <div v-if="showDateInput" class="date-input-row">
+        <span class="date-label">Which day did you complete this?</span>
+        <input
+          v-model="completionDate"
+          type="date"
+          class="date-input"
+          @keydown.enter="submitDate"
+          autofocus
+        />
+        <button class="btn-done" @click="submitDate">Done</button>
       </div>
     </div>
   </div>
@@ -136,6 +183,26 @@ function skipMetric() {
 .metric-input {
   flex: 1;
   min-width: 120px;
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.date-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.date-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.date-input {
   padding: 4px 8px;
   font-size: 13px;
   border: 1px solid var(--border);

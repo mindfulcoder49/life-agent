@@ -33,26 +33,30 @@ function getItemMetric(item) {
   return recurringMetrics.value[item.source_task_id] || null
 }
 
-async function completeItem(todoId, itemIndex, todo, metricValue) {
+async function completeItem(todoId, itemIndex, todo, payload, section = 'items') {
+  const { metricValue, completionDate } = payload || {}
   try {
-    const body = { item_index: itemIndex }
+    const body = { item_index: itemIndex, section }
     if (metricValue != null) body.metric_value = String(metricValue)
+    if (completionDate != null) body.completion_date = completionDate
     const res = await client.post(`/todo-lists/${todoId}/complete-item`, body)
     todo.data = res.data.data
   } catch {
-    if (todo.data?.items?.[itemIndex]) {
-      todo.data.items[itemIndex].completed = true
+    const items = todo.data?.[section]
+    if (items?.[itemIndex]) {
+      items[itemIndex].completed = true
     }
   }
 }
 
-async function uncompleteItem(todoId, itemIndex, todo) {
+async function uncompleteItem(todoId, itemIndex, todo, section = 'items') {
   try {
-    const res = await client.post(`/todo-lists/${todoId}/uncomplete-item`, { item_index: itemIndex })
+    const res = await client.post(`/todo-lists/${todoId}/uncomplete-item`, { item_index: itemIndex, section })
     todo.data = res.data.data
   } catch {
-    if (todo.data?.items?.[itemIndex]) {
-      todo.data.items[itemIndex].completed = false
+    const items = todo.data?.[section]
+    if (items?.[itemIndex]) {
+      items[itemIndex].completed = false
     }
   }
 }
@@ -72,17 +76,58 @@ async function uncompleteItem(todoId, itemIndex, todo) {
           <h3>{{ todo.data?.date || 'Undated' }}</h3>
         </div>
         <p v-if="todo.data?.reasoning" class="reasoning">{{ todo.data.reasoning }}</p>
-        <div v-if="todo.data?.items?.length" class="todo-items">
-          <TodoItem
-            v-for="(item, idx) in todo.data.items"
-            :key="idx"
-            :item="item"
-            :completed="!!item.completed"
-            :metric="getItemMetric(item)"
-            @complete="(val) => completeItem(todo.id, idx, todo, val)"
-            @uncomplete="uncompleteItem(todo.id, idx, todo)"
-          />
+
+        <!-- AI-chosen items -->
+        <div v-if="todo.data?.items?.length" class="todo-section">
+          <div class="section-label">Today's Plan</div>
+          <div class="todo-items">
+            <TodoItem
+              v-for="(item, idx) in todo.data.items"
+              :key="'llm-' + idx"
+              :item="item"
+              :completed="!!item.completed"
+              :metric="getItemMetric(item)"
+              :list-date="todo.data?.date"
+              @complete="(payload) => completeItem(todo.id, idx, todo, payload, 'items')"
+              @uncomplete="uncompleteItem(todo.id, idx, todo, 'items')"
+            />
+          </div>
         </div>
+
+        <!-- Mandatory recurring tasks auto-added by backend -->
+        <div v-if="todo.data?.mandatory_items?.length" class="todo-section">
+          <div class="section-label section-label--mandatory">Mandatory</div>
+          <div class="todo-items">
+            <TodoItem
+              v-for="(item, idx) in todo.data.mandatory_items"
+              :key="'man-' + idx"
+              :item="item"
+              :completed="!!item.completed"
+              :metric="getItemMetric(item)"
+              :list-date="todo.data?.date"
+              @complete="(payload) => completeItem(todo.id, idx, todo, payload, 'mandatory_items')"
+              @uncomplete="uncompleteItem(todo.id, idx, todo, 'mandatory_items')"
+            />
+          </div>
+        </div>
+
+        <!-- Overdue recurring tasks auto-added by backend -->
+        <div v-if="todo.data?.overdue_items?.length" class="todo-section">
+          <div class="section-label section-label--overdue">Overdue</div>
+          <div class="todo-items">
+            <TodoItem
+              v-for="(item, idx) in todo.data.overdue_items"
+              :key="'ov-' + idx"
+              :item="item"
+              :completed="!!item.completed"
+              :metric="getItemMetric(item)"
+              :list-date="todo.data?.date"
+              @complete="(payload) => completeItem(todo.id, idx, todo, payload, 'overdue_items')"
+              @uncomplete="uncompleteItem(todo.id, idx, todo, 'overdue_items')"
+            />
+          </div>
+        </div>
+
         <p v-if="todo.data?.agent_notes" class="agent-notes">{{ todo.data.agent_notes }}</p>
       </div>
     </div>
@@ -104,6 +149,26 @@ async function uncompleteItem(todoId, itemIndex, todo) {
   font-size: 13px;
   margin-bottom: 12px;
   font-style: italic;
+}
+.todo-section {
+  margin-bottom: 12px;
+}
+.todo-section:last-of-type {
+  margin-bottom: 0;
+}
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.section-label--mandatory {
+  color: #f59e0b;
+}
+.section-label--overdue {
+  color: #ef4444;
 }
 .todo-items {
   display: flex;

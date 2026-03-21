@@ -1,5 +1,5 @@
 from langchain_core.tools import tool
-from database import insert_row, update_row, delete_row, get_rows, get_row, get_db
+from database import insert_row, update_row, delete_row, get_rows, get_row, get_db, user_today
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 import json
@@ -136,8 +136,9 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         cognitive_load: int = 5,
         life_goal_ids: str = "[]",
         metric: str = "",
+        mandatory: bool = False,
     ) -> str:
-        """Add a recurring task. interval_days is how often it repeats. life_goal_ids is a JSON array of goal IDs. metric is an optional JSON object: {"label": "...", "unit": "...", "value_type": "number"|"text"|"meal"}"""
+        """Add a recurring task. interval_days is how often it repeats. life_goal_ids is a JSON array of goal IDs. metric is an optional JSON object: {"label": "...", "unit": "...", "value_type": "number"|"text"|"meal"}. Set mandatory=True if this task is directly essential for one of the user's life goals — mandatory tasks are always included in the daily todo list when due, in a dedicated section."""
         try:
             goal_ids = json.loads(life_goal_ids) if isinstance(life_goal_ids, str) else life_goal_ids
         except json.JSONDecodeError:
@@ -157,6 +158,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             "cognitive_load": cognitive_load,
             "life_goal_ids": goal_ids,
             "active": True,
+            "mandatory": mandatory,
         }
         if metric_data:
             data["metric"] = metric_data
@@ -213,6 +215,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             "from_recurring_id": task_id,
             "completed": True,
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_date": user_today(user_id),
             "life_goal_ids": row["data"].get("life_goal_ids", []),
             "cognitive_load": row["data"].get("cognitive_load", 5),
             "estimated_minutes": row["data"].get("estimated_minutes", 0),

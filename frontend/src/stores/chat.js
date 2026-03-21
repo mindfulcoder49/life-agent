@@ -14,6 +14,7 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = ref(false)
   const streamingContent = ref('')
   const toolStatus = ref(null)  // {tool, agent} or null
+  let _abortController = null
 
   async function loadHistory() {
     try {
@@ -112,6 +113,13 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function stopStreaming() {
+    if (_abortController) {
+      _abortController.abort()
+      _abortController = null
+    }
+  }
+
   async function sendMessageStream(text) {
     const isFirstMessage = messages.value.length === 0
     messages.value.push({ role: 'user', content: text, id: Date.now() })
@@ -120,6 +128,8 @@ export const useChatStore = defineStore('chat', () => {
     streamingContent.value = ''
     toolStatus.value = null
     let gotDone = false
+
+    _abortController = new AbortController()
 
     try {
       const response = await fetch('/api/chat/stream', {
@@ -130,6 +140,7 @@ export const useChatStore = defineStore('chat', () => {
           message: text,
           session_id: sessionId.value,
         }),
+        signal: _abortController.signal,
       })
 
       if (!response.ok) {
@@ -186,12 +197,15 @@ export const useChatStore = defineStore('chat', () => {
 
       if (isFirstMessage) loadSessions()
     } catch (err) {
-      messages.value.push({
-        role: 'assistant',
-        content: 'Sorry, something went wrong. ' + err.message,
-        id: Date.now() + 1,
-      })
+      if (err.name !== 'AbortError') {
+        messages.value.push({
+          role: 'assistant',
+          content: 'Sorry, something went wrong. ' + err.message,
+          id: Date.now() + 1,
+        })
+      }
     } finally {
+      _abortController = null
       streaming.value = false
       streamingContent.value = ''
       toolStatus.value = null
@@ -246,6 +260,11 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function renameSession(sid, name) {
+    await client.patch(`/chat/sessions/${encodeURIComponent(sid)}/rename`, { name })
+    await loadSessions()
+  }
+
   async function deleteMessage(id) {
     try {
       await client.delete(`/chat/history/${id}`)
@@ -270,7 +289,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionId, sessions,
     streaming, streamingContent, toolStatus,
     loadHistory, loadSessions, loadActiveAgent,
-    switchSession, newSession, deleteSession,
-    sendMessage, sendMessageStream, deleteMessage, clearHistory,
+    switchSession, newSession, deleteSession, renameSession,
+    sendMessage, sendMessageStream, stopStreaming, deleteMessage, clearHistory,
   }
 })

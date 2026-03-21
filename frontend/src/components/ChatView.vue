@@ -1,17 +1,27 @@
 <script setup>
 import { ref, onMounted, nextTick, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import ChatMessage from './ChatMessage.vue'
 
 const chat = useChatStore()
+const route = useRoute()
+const router = useRouter()
 const input = ref('')
 const messagesEl = ref(null)
 const showSessionMenu = ref(false)
+const renamingSession = ref(null)
+const renameValue = ref('')
 
-onMounted(() => {
-  chat.loadHistory()
-  chat.loadActiveAgent()
-  chat.loadSessions()
+onMounted(async () => {
+  const sid = route.query.session
+  if (sid && sid !== chat.sessionId) {
+    await chat.switchSession(sid)
+  } else {
+    await chat.loadHistory()
+    await chat.loadActiveAgent()
+  }
+  await chat.loadSessions()
 })
 
 function scrollToBottom() {
@@ -50,18 +60,41 @@ async function clearChat() {
 
 async function newSession() {
   await chat.newSession()
+  router.replace({ query: { session: chat.sessionId } })
   showSessionMenu.value = false
 }
 
 async function pickSession(sid) {
   await chat.switchSession(sid)
+  router.replace({ query: sid !== 'default' ? { session: sid } : {} })
   showSessionMenu.value = false
 }
 
 async function removeSession(sid) {
   if (confirm('Delete this chat session?')) {
     await chat.deleteSession(sid)
+    if (chat.sessionId === 'default') {
+      router.replace({ query: {} })
+    }
   }
+}
+
+function startRename(sid, currentName) {
+  renamingSession.value = sid
+  renameValue.value = currentName || ''
+  nextTick(() => {
+    const el = document.getElementById('rename-input-' + sid)
+    if (el) el.focus()
+  })
+}
+
+async function saveRename(sid) {
+  await chat.renameSession(sid, renameValue.value)
+  renamingSession.value = null
+}
+
+function cancelRename() {
+  renamingSession.value = null
 }
 </script>
 
@@ -99,9 +132,27 @@ async function removeSession(sid) {
           :class="{ active: chat.sessionId === s.session_id }"
           @click="pickSession(s.session_id)"
         >
-          <span class="session-label">{{ s.session_id }}</span>
+          <div class="session-label">
+            <span v-if="renamingSession !== s.session_id">{{ s.name || s.session_id }}</span>
+            <input
+              v-else
+              :id="'rename-input-' + s.session_id"
+              v-model="renameValue"
+              class="rename-input"
+              @keydown.enter.stop="saveRename(s.session_id)"
+              @keydown.escape.stop="cancelRename"
+              @blur="cancelRename"
+              @click.stop
+            />
+          </div>
           <span class="session-actions">
             <span class="session-meta">{{ s.message_count }} msgs</span>
+            <button
+              v-if="renamingSession !== s.session_id"
+              class="session-rename-btn"
+              @click.stop="startRename(s.session_id, s.name)"
+              title="Rename"
+            >&#x270e;</button>
             <button class="session-del-btn" @click.stop="removeSession(s.session_id)" title="Delete session">&#x2715;</button>
           </span>
         </div>
@@ -143,7 +194,8 @@ async function removeSession(sid) {
         placeholder="Type a message..."
         rows="1"
       ></textarea>
-      <button @click="send" :disabled="chat.sending || !input.trim()">Send</button>
+      <button v-if="chat.streaming" class="stop-btn" @click="chat.stopStreaming()" title="Stop">&#x25a0; Stop</button>
+      <button v-else @click="send" :disabled="chat.sending || !input.trim()">Send</button>
     </div>
   </div>
 </template>
@@ -208,7 +260,7 @@ async function removeSession(sid) {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  min-width: 220px;
+  min-width: 240px;
   z-index: 50;
   box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
@@ -239,6 +291,7 @@ async function removeSession(sid) {
   justify-content: space-between;
   align-items: center;
   color: var(--text-secondary);
+  gap: 6px;
 }
 .session-item:hover {
   background: var(--bg-secondary);
@@ -248,20 +301,49 @@ async function removeSession(sid) {
   font-weight: 600;
 }
 .session-label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+}
+.rename-input {
+  width: 100%;
+  font-size: 13px;
+  padding: 2px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  outline: none;
 }
 .session-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-shrink: 0;
 }
 .session-meta {
   font-size: 11px;
   color: var(--text-muted);
+}
+.session-rename-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  line-height: 1;
+  opacity: 0;
+}
+.session-item:hover .session-rename-btn {
+  opacity: 0.7;
+}
+.session-rename-btn:hover {
+  opacity: 1 !important;
+  color: var(--accent);
 }
 .session-del-btn {
   background: transparent;
@@ -304,6 +386,19 @@ async function removeSession(sid) {
 }
 .input-bar button {
   align-self: flex-end;
+}
+.stop-btn {
+  align-self: flex-end;
+  padding: 6px 12px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+}
+.stop-btn:hover {
+  background: #dc2626;
 }
 .typing {
   display: flex;

@@ -69,7 +69,8 @@ def run_helium(user_id: int, messages: list, context_cache: dict = None, on_even
         return f"Handing off to {next_agent}."
 
     tools = base_tools + [finish_conversation]
-    llm = ChatOpenAI(model=config.MODEL_SMALL, api_key=api_key)
+    from runtime_config import get_agent_model
+    llm = ChatOpenAI(model=get_agent_model("helium"), api_key=api_key)
     llm_with_tools = llm.bind_tools(tools)
     tool_map = {t.name: t for t in tools}
 

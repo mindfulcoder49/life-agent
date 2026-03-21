@@ -1,6 +1,7 @@
 import sqlite3
 import json
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from config import DB_PATH
 
 def get_db():
@@ -95,6 +96,9 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_one_time_tasks_user_completed
             ON one_time_tasks (json_extract(data, '$.user_id'), json_extract(data, '$.completed'));
 
+        CREATE INDEX IF NOT EXISTS idx_one_time_tasks_from_recurring
+            ON one_time_tasks (json_extract(data, '$.from_recurring_id'));
+
         CREATE INDEX IF NOT EXISTS idx_recurring_tasks_user_active
             ON recurring_tasks (json_extract(data, '$.user_id'), json_extract(data, '$.active'));
 
@@ -131,6 +135,25 @@ def init_db():
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def user_today(user_id: int) -> str:
+    """Return the user's local date as YYYY-MM-DD, using their stored IANA timezone."""
+    conn = get_db()
+    row = conn.execute("SELECT data FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    tz_str = "UTC"
+    if row:
+        try:
+            data = json.loads(row["data"])
+            tz_str = data.get("timezone") or "UTC"
+        except (json.JSONDecodeError, TypeError):
+            pass
+    try:
+        tz = ZoneInfo(tz_str)
+    except (ZoneInfoNotFoundError, Exception):
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz).date().isoformat()
 
 def insert_row(table, data: dict) -> int:
     conn = get_db()

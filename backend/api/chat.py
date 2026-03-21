@@ -3,9 +3,9 @@ import json
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
-from models import ChatRequest
+from models import ChatRequest, SessionRenameRequest
 from auth import get_current_user
-from database import insert_row, get_rows, get_row, count_rows, get_db
+from database import insert_row, get_rows, get_row, count_rows, get_db, _row_to_dict
 from logging_service import log_info, log_error
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -79,9 +79,39 @@ def get_sessions(request: Request):
 @router.get("/history")
 def get_history(request: Request, session_id: str = "default"):
     user = get_current_user(request)
-    filters = {"user_id": user["id"], "session_id": session_id}
-    rows = get_rows("chat_contexts", filters=filters, limit=200, order_desc=False)
-    return {"items": rows}
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT * FROM chat_contexts
+        WHERE json_extract(data, '$.user_id') = ?
+          AND json_extract(data, '$.session_id') = ?
+          AND json_extract(data, '$.role') != 'session_meta'
+        ORDER BY id ASC
+        LIMIT 200
+    """, (user["id"], session_id)).fetchall()
+    conn.close()
+    return {"items": [_row_to_dict(r) for r in rows]}
+
+@router.patch("/sessions/{session_id}/rename")
+def rename_session(request: Request, session_id: str, body: SessionRenameRequest):
+    user = get_current_user(request)
+    name = body.name.strip()[:80]
+    conn = get_db()
+    conn.execute("""
+        DELETE FROM chat_contexts
+        WHERE json_extract(data, '$.user_id') = ?
+          AND json_extract(data, '$.session_id') = ?
+          AND json_extract(data, '$.role') = 'session_meta'
+    """, (user["id"], session_id))
+    conn.commit()
+    conn.close()
+    if name:
+        insert_row("chat_contexts", {
+            "user_id": user["id"],
+            "session_id": session_id,
+            "role": "session_meta",
+            "name": name,
+        })
+    return {"ok": True}
 
 @router.delete("/history/{message_id}")
 def delete_message(request: Request, message_id: int):

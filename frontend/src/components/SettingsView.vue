@@ -12,14 +12,27 @@ const apiKey = ref('')
 const hasApiKey = ref(false)
 const saving = ref(false)
 const message = ref('')
+const timezone = ref('')
+const tzMessage = ref('')
 
 onMounted(async () => {
   try {
     const res = await client.get('/users/me')
     profile.value = res.data
     hasApiKey.value = res.data.has_api_key
+    timezone.value = res.data.timezone || 'UTC'
   } catch {}
 })
+
+async function saveTimezone() {
+  tzMessage.value = ''
+  try {
+    await client.put('/users/me', { data: { timezone: timezone.value } })
+    tzMessage.value = 'Timezone saved'
+  } catch (err) {
+    tzMessage.value = 'Error: ' + (err.response?.data?.detail || err.message)
+  }
+}
 
 async function saveApiKey() {
   saving.value = true
@@ -61,6 +74,17 @@ async function logout() {
     <div class="card">
       <h3>Profile</h3>
       <p style="margin-top: 8px; color: var(--text-secondary);">{{ profile.display_name }} (@{{ profile.username }})</p>
+    </div>
+    <div class="card">
+      <h3>Timezone</h3>
+      <p style="margin-top: 4px; font-size: 13px; color: var(--text-muted);">
+        Used to determine the correct local date for task completions. Use an IANA timezone name (e.g. America/New_York, Europe/London, Asia/Tokyo).
+      </p>
+      <div class="form-group" style="margin-top: 12px;">
+        <input v-model="timezone" type="text" placeholder="America/New_York" />
+      </div>
+      <button @click="saveTimezone">Save Timezone</button>
+      <p v-if="tzMessage" style="margin-top: 8px; font-size: 13px; color: var(--success);">{{ tzMessage }}</p>
     </div>
     <div class="card">
       <h3>OpenAI API Key</h3>

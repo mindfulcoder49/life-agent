@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from database import init_db, get_db, insert_row
-from config import ADMIN_USERNAME, ADMIN_PASSWORD
+from config import ADMIN_USERNAME, ADMIN_PASSWORD, TEST_USER_USERNAME, TEST_USER_PASSWORD
 from auth import hash_password
 from logging_service import log_info
 import json
@@ -31,6 +31,29 @@ def seed_admin():
     }
     admin_id = insert_row("users", user_data)
     log_info("system", "seed", "Admin user created")
+
+def seed_test_user():
+    conn = get_db()
+    existing = conn.execute(
+        "SELECT id FROM users WHERE json_extract(data, '$.username') = ?",
+        (TEST_USER_USERNAME,)
+    ).fetchone()
+    conn.close()
+    if existing:
+        return
+    user_data = {
+        "username": TEST_USER_USERNAME,
+        "password_hash": hash_password(TEST_USER_PASSWORD),
+        "display_name": "Test User",
+        "is_admin": False,
+        "openai_api_key": None,
+        "theme": "dark",
+        "settings": {},
+        "timezone": "UTC",
+    }
+    insert_row("users", user_data)
+    log_info("system", "seed", "Test user created")
+
 
 def seed_help_articles():
     from database import count_rows
@@ -321,6 +344,7 @@ def seed_help_articles():
 async def lifespan(app: FastAPI):
     init_db()
     seed_admin()
+    seed_test_user()
     seed_help_articles()
     # Initialize agent graph
     try:

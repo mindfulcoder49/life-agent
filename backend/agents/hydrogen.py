@@ -28,6 +28,9 @@ Current date/time: {now}
 - **Beryllium**: Task and Metrics specialist (add/edit/delete tasks, log meals/sleep/exercise/lifts, review metric trends)
 - **Boron**: Weekly Review specialist (structured review of the past 7 days — completions, metrics, wins, misses, adjustments)
 
+## Tasks
+{has_tasks_note}
+
 ## Routing Logic — FOLLOW THIS ORDER STRICTLY
 Use the data already provided above, then route:
 1. NO life goals exist -> route to helium. This is ALWAYS the first priority.
@@ -39,8 +42,8 @@ Use the data already provided above, then route:
 7. User explicitly asks about state/check-in -> route to lithium
 8. Life goals exist, NO state in past 4 hours, AND no explicit request from the user -> route to lithium
 9. Life goals + recent state but NO tasks -> route to beryllium
-10. Life goals + recent state + tasks -> offer a daily recommendation. If the last weekly review was 7+ days ago (or never), also mention it: "Also, it's been X days since your last weekly review — want to do that now or after your plan?"
-11. If the user says yes to a recommendation -> read all data (goals, last 10 states, last 2 days completed tasks, overdue recurring tasks, all incomplete one-time tasks) and synthesize a prioritized daily plan, then save it as a todo list
+10. Life goals + recent state + tasks -> offer a daily recommendation. Check the Weekly Review section below — if it says weekly review is eligible AND the last review was 7+ days ago, also mention it: "Also, it's been X days since your last weekly review — want to do that now or after your plan?"
+11. If the user says yes to a recommendation -> call get_tasks and get_overdue_recurring_tasks to get full context. From incomplete one-time tasks, overdue recurring tasks, and the user's current state/goals, synthesize a prioritized plan. Call create_todo_list with only the AI-chosen items (focus on one-time tasks and context-driven picks — the backend will automatically append any mandatory and overdue recurring tasks you didn't include into separate sections). The list id is returned in the tool result and stored in context cache. If the user later says you missed something, call update_todo_list with that list id to add the item.
 12. If the user says yes to a weekly review -> route to boron
 
 IMPORTANT: Explicit user requests (rules 2-7) take priority over automatic routing (rules 8-9). If the user says "add a task" or "manage my tasks", route to beryllium. If the user says "log my workout" or "log what I ate", route to beryllium. If the user says "weekly review" or "review my week", route to boron.
@@ -51,6 +54,7 @@ Read everything: goals, recent states, recent metrics, completed tasks, overdue 
 When building a todo list, each item sourced from a task MUST include:
 - `source_task_id`: the task's database ID (int)
 - `source_type`: either `"one_time"` or `"recurring"`
+- `description`: copy the task's description field verbatim if it has one (omit or leave empty if blank)
 - `completed`: false (default)
 Items not sourced from either table should have `source_task_id` as null, `source_type` as null, and `completed` as false.
 
@@ -97,7 +101,7 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
 
     life_goal_tools = make_life_goal_tools(user_id, context_cache)
     task_tools = make_task_tools(user_id, context_cache)
-    todo_tools = make_todo_tools(user_id)
+    todo_tools = make_todo_tools(user_id, context_cache)
     help_tools = make_help_tools()
 
     # Hydrogen gets route + get_tasks + todo creation + help
@@ -111,17 +115,22 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
     for t in help_tools:
         tools.append(t)
 
-    llm = ChatOpenAI(model=config.MODEL_BIG, api_key=api_key)
+    from runtime_config import get_agent_model
+    llm = ChatOpenAI(model=get_agent_model("hydrogen"), api_key=api_key)
     llm_with_tools = llm.bind_tools(tools)
     tool_map = {t.name: t for t in tools}
 
-    # Build context cache hint (exclude data shown in dedicated sections)
+    # Build context cache hint (exclude data shown in dedicated sections and internal flags)
     cache_hints = []
-    excluded = {"recent_states", "life_goals", "recent_metrics", "last_weekly_review"}
+    excluded = {
+        "recent_states", "life_goals", "recent_metrics", "last_weekly_review",
+        "oldest_todo_date", "has_tasks", "session_state_id",
+    }
     for key, cached in context_cache.items():
         if key in excluded:
             continue
-        cache_hints.append(f"- {key}: {str(cached.get('result', cached))[:300]}")
+        value = str(cached.get('result', cached))[:300] if isinstance(cached, dict) else str(cached)[:300]
+        cache_hints.append(f"- {key}: {value}")
     context_hint = "\n".join(cache_hints) if cache_hints else "No cached data yet."
 
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
@@ -130,25 +139,50 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
+    # Determine task count for routing rules 9/10
+    if "has_tasks" not in context_cache:
+        from database import count_rows as _count_rows
+        has_ot = _count_rows("one_time_tasks", filters={"user_id": user_id, "completed": False})
+        has_rec = _count_rows("recurring_tasks", filters={"user_id": user_id, "active": True})
+        context_cache["has_tasks"] = has_ot > 0 or has_rec > 0
+    has_tasks_note = "Tasks exist (skip rule 9, use rule 10+)." if context_cache["has_tasks"] else "No tasks yet (apply rule 9)."
+
+    # Determine if the app has been in use long enough to suggest a weekly review
+    if "oldest_todo_date" not in context_cache:
+        from database import get_rows as _get_rows
+        _oldest = _get_rows("todo_lists", filters={"user_id": user_id}, limit=1, order_desc=False)
+        context_cache["oldest_todo_date"] = _oldest[0]["created_at"][:10] if _oldest else None
+    oldest_todo_date = context_cache["oldest_todo_date"]
+
+    app_old_enough = False
+    if oldest_todo_date:
+        try:
+            days_using = (datetime.now(timezone.utc).date() - datetime.fromisoformat(oldest_todo_date).date()).days
+            app_old_enough = days_using >= 7
+        except Exception:
+            pass
+
     last_review = context_cache.get("last_weekly_review")
-    if last_review:
+    if not app_old_enough:
+        last_review_section = "## Weekly Review\nUser has been using the app for less than 7 days. Do NOT suggest a weekly review under any circumstances."
+    elif last_review:
         created = last_review.get("created_at", "")[:10]
         week_start = last_review.get("week_start", "?")
         week_end = last_review.get("week_end", "?")
         try:
-            from datetime import date
             days_ago = (datetime.now(timezone.utc).date() - datetime.fromisoformat(last_review["created_at"]).date()).days
             days_str = f"{days_ago} days ago"
         except Exception:
             days_str = "unknown"
-        last_review_section = f"## Weekly Review\nLast completed: {created} (week of {week_start} to {week_end}) — {days_str}."
+        last_review_section = f"## Weekly Review\nEligible. Last completed: {created} (week of {week_start} to {week_end}) — {days_str}."
     else:
-        last_review_section = "## Weekly Review\nNo weekly review completed yet."
+        last_review_section = "## Weekly Review\nEligible (app is 7+ days old). No review completed yet."
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         now=now_str, context_hint=context_hint,
         goals_section=goals_section, states_section=states_section,
         metrics_section=metrics_section, last_review_section=last_review_section,
+        has_tasks_note=has_tasks_note,
     )
 
     call_messages = [SystemMessage(content=system_prompt)] + messages

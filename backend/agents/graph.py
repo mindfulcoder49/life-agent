@@ -95,17 +95,27 @@ def create_graph_runner():
             FROM chat_contexts
             WHERE json_extract(data, '$.user_id') = ?
               AND json_extract(data, '$.session_id') != 'default'
+              AND json_extract(data, '$.role') != 'session_meta'
             GROUP BY json_extract(data, '$.session_id')
             ORDER BY MAX(created_at) DESC
         """, (user_id,)).fetchall()
+        name_rows = conn.execute("""
+            SELECT json_extract(data, '$.session_id') as sid,
+                   json_extract(data, '$.name') as name
+            FROM chat_contexts
+            WHERE json_extract(data, '$.user_id') = ?
+              AND json_extract(data, '$.role') = 'session_meta'
+        """, (user_id,)).fetchall()
         conn.close()
+        names = {r["sid"]: r["name"] for r in name_rows}
         result = []
         for r in rows:
             result.append({
-                "session_id": r[0],
-                "started": r[1],
-                "last_message": r[2],
-                "message_count": r[3],
+                "session_id": r["sid"],
+                "started": r["started"],
+                "last_message": r["last_msg"],
+                "message_count": r["msg_count"],
+                "name": names.get(r["sid"]),
             })
         return result
 

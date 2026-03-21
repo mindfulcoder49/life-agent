@@ -17,6 +17,7 @@ def get_profile(request: Request):
         "theme": data.get("theme", "dark"),
         "settings": data.get("settings", {}),
         "has_api_key": bool(data.get("openai_api_key")),
+        "timezone": data.get("timezone", "UTC"),
     }
 
 @router.put("/me")
@@ -24,7 +25,7 @@ def update_profile(request: Request, body: DataUpdate):
     user = get_current_user(request)
     row = get_row("users", user["id"])
     data = row["data"]
-    allowed = {"display_name", "theme", "settings"}
+    allowed = {"display_name", "theme", "settings", "timezone"}
     for key in allowed:
         if key in body.data:
             data[key] = body.data[key]

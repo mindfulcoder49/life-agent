@@ -5,6 +5,7 @@ BACKEND_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); p=s
 
 echo "Backend → http://localhost:$BACKEND_PORT"
 echo "Frontend → http://localhost:5173 (or next available)"
+echo "$BACKEND_PORT" > "$(dirname "$0")/.backend_port"
 
 cd backend
 source venv/bin/activate

@@ -53,6 +53,7 @@ def make_state_tools(user_id: int, context_cache: dict = None):
         }
         row_id = insert_row("user_states", data)
         _refresh_cache()
+        context_cache["session_state_id"] = row_id
         return json.dumps({"success": True, "id": row_id, "message": "State recorded."})
 
     @tool

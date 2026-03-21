@@ -78,7 +78,8 @@ def run_boron(user_id: int, messages: list, context_cache: dict = None, on_event
         return "Handing off to hydrogen."
 
     tools = review_tools + [finish_conversation]
-    llm = ChatOpenAI(model=config.MODEL_BIG, api_key=api_key)
+    from runtime_config import get_agent_model
+    llm = ChatOpenAI(model=get_agent_model("boron"), api_key=api_key)
     llm_with_tools = llm.bind_tools(tools)
     tool_map = {t.name: t for t in tools}
 

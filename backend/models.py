@@ -64,3 +64,6 @@ class HelpArticleCreate(BaseModel):
     body: str
     category: Optional[str] = "general"
     order: Optional[int] = 0
+
+class SessionRenameRequest(BaseModel):
+    name: str
