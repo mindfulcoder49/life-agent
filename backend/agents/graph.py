@@ -137,6 +137,11 @@ def create_graph_runner():
         if "last_weekly_review" not in state["context_cache"]:
             state["context_cache"]["last_weekly_review"] = fetch_last_weekly_review(user_id)
 
+        # Code-level pre-routing: skip Hydrogen LLM for unambiguous cases
+        if active == "hydrogen" and not state["context_cache"].get("life_goals"):
+            logger.info(f"[user={user_id}|{session_id}] Pre-routing -> helium (no life goals)")
+            active = "helium"
+
         logger.info(f"[user={user_id}|{session_id}] >>> Active: {active}")
 
         log_conversation_turn(user_id, session_id, "user", "input", message)

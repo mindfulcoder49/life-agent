@@ -24,8 +24,8 @@ onMounted(async () => {
     themeStore.initTheme(auth.user.theme)
   } else {
     themeStore.initTheme()
-    if (route.path !== '/login') {
-      router.push('/login')
+    if (route.path !== '/login' && route.path !== '/onboarding' && route.path !== '/setup-password') {
+      router.push('/onboarding')
     }
   }
 })
@@ -34,6 +34,7 @@ const isLoggedIn = computed(() => !!auth.user)
 const isAdmin = computed(() => auth.user?.is_admin)
 const currentTab = computed(() => {
   const path = route.path
+  if (path.startsWith('/welcome')) return 'welcome'
   if (path.startsWith('/chat')) return 'chat'
   if (path.startsWith('/database')) return 'database'
   if (path.startsWith('/todo')) return 'todo'
@@ -59,6 +60,10 @@ const currentTab = computed(() => {
       <ThemePicker v-if="showThemePickerRef" @close="showThemePickerRef = false" />
       <router-view />
       <nav class="bottom-nav">
+        <a href="#/welcome" :class="{ active: currentTab === 'welcome' }">
+          <span class="icon">&#127968;</span>
+          Home
+        </a>
         <a href="#/chat" :class="{ active: currentTab === 'chat' }">
           <span class="icon">&#128172;</span>
           Chat

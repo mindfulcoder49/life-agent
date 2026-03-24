@@ -381,6 +381,8 @@ from api.tasks import router as tasks_router
 from api.todo_lists import router as todo_lists_router
 from api.admin import router as admin_router
 from api.help import router as help_router
+from api.onboarding import router as onboarding_router
+from api.welcome import router as welcome_router
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(users_router)
@@ -390,6 +392,8 @@ app.include_router(tasks_router)
 app.include_router(todo_lists_router)
 app.include_router(admin_router)
 app.include_router(help_router)
+app.include_router(onboarding_router)
+app.include_router(welcome_router)
 
 @app.get("/api/health")
 async def health():

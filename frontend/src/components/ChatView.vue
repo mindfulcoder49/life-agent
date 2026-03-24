@@ -7,6 +7,7 @@ import ChatMessage from './ChatMessage.vue'
 const chat = useChatStore()
 const route = useRoute()
 const router = useRouter()
+
 const input = ref('')
 const messagesEl = ref(null)
 const showSessionMenu = ref(false)
@@ -22,6 +23,11 @@ onMounted(async () => {
     await chat.loadActiveAgent()
   }
   await chat.loadSessions()
+  if (chat.pendingMessage) {
+    const msg = chat.pendingMessage
+    chat.pendingMessage = null
+    await chat.sendMessageStream(msg)
+  }
 })
 
 function scrollToBottom() {

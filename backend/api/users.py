@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request
 from models import ApiKeyUpdate, DataUpdate
 from auth import get_current_user
-from database import get_row, update_row
+from database import get_row, update_row, count_rows
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -10,6 +10,7 @@ def get_profile(request: Request):
     user = get_current_user(request)
     row = get_row("users", user["id"])
     data = row["data"]
+    is_new = count_rows("user_states", filters={"user_id": user["id"]}) == 0
     return {
         "id": user["id"],
         "username": data["username"],
@@ -18,6 +19,8 @@ def get_profile(request: Request):
         "settings": data.get("settings", {}),
         "has_api_key": bool(data.get("openai_api_key")),
         "timezone": data.get("timezone", "UTC"),
+        "aspirational_image_b64": data.get("aspirational_image_b64"),
+        "is_new": is_new,
     }
 
 @router.put("/me")

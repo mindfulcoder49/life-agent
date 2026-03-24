@@ -11,7 +11,7 @@ from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.life_goal_tools import make_life_goal_tools, format_goals_for_prompt
 from agents.tools.state_tools import format_states_for_prompt
 from agents.tools.task_tools import format_metrics_for_prompt
-from agents.tools.task_tools import make_task_tools
+from agents.tools.task_tools import make_task_tools, fetch_tasks, format_tasks_for_prompt
 from agents.tools.todo_tools import make_todo_tools
 from agents.tools.help_tools import make_help_tools
 from agents import get_api_key
@@ -31,8 +31,14 @@ Current date/time: {now}
 ## Tasks
 {has_tasks_note}
 
+{tasks_section}
+
+## Returning from a specialist
+If the conversation shows a specialist just finished (their message is the most recent AI message before yours), re-read the user's most recent human message. If it expressed more than one intent and the specialist only addressed one, route to the appropriate specialist for the remaining intent before concluding. Example: user said "add a task and check my state today" → Beryllium handled the task → you must now route to lithium. Do NOT conclude the turn with unaddressed intents.
+
 ## Routing Logic — FOLLOW THIS ORDER STRICTLY
 Use the data already provided above, then route:
+0. If the message contains BOTH a task/metric intent AND a state-check intent ("how I'm feeling", "check in", "check my state"), route to **lithium first** — the task intent will be handled when hydrogen is called after lithium finishes.
 1. NO life goals exist -> route to helium. This is ALWAYS the first priority.
 2. User explicitly asks to update/add goals -> route to helium
 3. User wants to log metrics, track a workout, log meals/sleep/exercise/lifts, or set up metric tracking -> route to beryllium
@@ -75,6 +81,7 @@ Items not sourced from either table should have `source_task_id` as null, `sourc
 - Do NOT re-introduce yourself or the team after the first interaction.
 - When routing, your response can be brief or empty — the specialist will greet the user.
 - Life goals, recent states, and recent metrics are already provided above — do NOT call get_life_goals to make routing decisions.
+- **Do NOT call get_tasks** — its output is already in the '## Current Tasks' section above. Call it only after you've written a task and need a refresh.
 - If you already have recent data from the context cache, do NOT call those tools again — use the cached info to make your routing decision."""
 
 
@@ -136,6 +143,9 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
     states_section = format_states_for_prompt(context_cache.get("recent_states", []))
     metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
+    if "tasks" not in context_cache:
+        context_cache["tasks"] = fetch_tasks(user_id)
+    tasks_section = format_tasks_for_prompt(context_cache["tasks"])
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -182,7 +192,7 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
         now=now_str, context_hint=context_hint,
         goals_section=goals_section, states_section=states_section,
         metrics_section=metrics_section, last_review_section=last_review_section,
-        has_tasks_note=has_tasks_note,
+        has_tasks_note=has_tasks_note, tasks_section=tasks_section,
     )
 
     call_messages = [SystemMessage(content=system_prompt)] + messages

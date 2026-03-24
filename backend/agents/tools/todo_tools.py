@@ -48,7 +48,7 @@ def make_todo_tools(user_id: int, context_cache: dict = None):
             interval = task["data"].get("interval_days", 7)
             cutoff = (now - timedelta(days=interval)).date().isoformat()
             last_done = last_done_map.get(tid)
-            if not last_done or last_done < cutoff:
+            if not last_done or last_done <= cutoff:
                 item = {
                     "title": task["data"]["title"],
                     "description": task["data"].get("description", ""),

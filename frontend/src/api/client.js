@@ -6,11 +6,15 @@ const client = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+const PUBLIC_HASHES = ['#/onboarding', '#/login', '#/setup-password']
+
 client.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
-      window.location.hash = '#/login'
+      if (!PUBLIC_HASHES.some(r => window.location.hash.startsWith(r))) {
+        window.location.hash = '#/onboarding'
+      }
     }
     return Promise.reject(err)
   }

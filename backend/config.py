@@ -19,3 +19,11 @@ MODEL_BIG = "gpt-5"
 MODEL_SMALL = "gpt-5-mini"
 
 SESSION_EXPIRE_HOURS = 72
+
+SMTP_HOST = os.getenv("MAIL_HOST", "smtp.hostinger.com")
+SMTP_PORT = int(os.getenv("MAIL_PORT", "587"))
+SMTP_USER = os.getenv("MAIL_USERNAME", "")
+SMTP_PASS = os.getenv("MAIL_PASSWORD", "")
+SMTP_FROM = os.getenv("MAIL_FROM_ADDRESS", "noreply@alcivartech.com")
+SMTP_FROM_NAME = os.getenv("MAIL_FROM_NAME", "Life Agent")
+APP_URL = os.getenv("APP_URL", "http://localhost:5173")

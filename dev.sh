@@ -9,7 +9,7 @@ echo "$BACKEND_PORT" > "$(dirname "$0")/.backend_port"
 
 cd backend
 source venv/bin/activate
-uvicorn main:app --reload --port "$BACKEND_PORT" &
+APP_URL="http://localhost:5173" uvicorn main:app --reload --port "$BACKEND_PORT" &
 BACKEND_PID=$!
 cd ..
 

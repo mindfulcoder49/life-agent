@@ -14,6 +14,7 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = ref(false)
   const streamingContent = ref('')
   const toolStatus = ref(null)  // {tool, agent} or null
+  const pendingMessage = ref(null)
   let _abortController = null
 
   async function loadHistory() {
@@ -287,7 +288,7 @@ export const useChatStore = defineStore('chat', () => {
   return {
     messages, sending, activeAgent, activeAgentLabel,
     sessionId, sessions,
-    streaming, streamingContent, toolStatus,
+    streaming, streamingContent, toolStatus, pendingMessage,
     loadHistory, loadSessions, loadActiveAgent,
     switchSession, newSession, deleteSession, renameSession,
     sendMessage, sendMessageStream, stopStreaming, deleteMessage, clearHistory,

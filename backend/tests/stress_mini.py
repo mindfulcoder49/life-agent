@@ -5,7 +5,8 @@ Run with:
   cd backend && venv/bin/python3 tests/stress_mini.py
 """
 
-import os, sys, json, requests, textwrap
+import os, sys, json, requests, textwrap, re
+from datetime import datetime
 
 def _discover_port():
     if os.environ.get("BACKEND_PORT"):
@@ -362,7 +363,61 @@ def test_lithium_edge_cases(uid):
 # RUN ALL
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def save_timing_report(run_start: datetime):
+    """Fetch logs since run_start, parse LLM gaps, write a timing report."""
+    lines = api("get", "/log/tail?lines=800")["lines"]
+
+    pat = re.compile(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[\w+\] life_agent: \[user=\d+[^\]]*\] (.+)$')
+    entries = []
+    for line in lines:
+        m = pat.match(line)
+        if m:
+            ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+            if ts >= run_start:
+                entries.append((ts, m.group(2)))
+
+    gaps = []
+    for i in range(1, len(entries)):
+        delta = (entries[i][0] - entries[i-1][0]).seconds
+        if delta >= 2:
+            gaps.append((delta, entries[i-1][1], entries[i][1]))
+
+    gaps.sort(reverse=True)
+
+    report_dir = os.path.join(os.path.dirname(__file__), "reports")
+    os.makedirs(report_dir, exist_ok=True)
+    fname = os.path.join(report_dir, f"timing_{run_start.strftime('%Y%m%d_%H%M%S')}.txt")
+
+    with open(fname, "w") as f:
+        f.write(f"Stress test timing report — {run_start.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"{'='*70}\n\n")
+
+        f.write("TOP GAPS (slowest LLM round-trips, descending)\n")
+        f.write(f"{'─'*70}\n")
+        for delta, before, after in gaps[:30]:
+            f.write(f"  {delta:>3}s  waiting after: {before[:70]}\n")
+            f.write(f"       resolved by:  {after[:70]}\n\n")
+
+        f.write(f"\nALL GAPS >= 2s ({len(gaps)} total)\n")
+        f.write(f"{'─'*70}\n")
+        for delta, before, after in gaps:
+            f.write(f"  {delta:>3}s  {before[:55]}  →  {after[:40]}\n")
+
+        f.write(f"\n{'='*70}\n")
+        f.write(f"Total entries parsed: {len(entries)}\n")
+
+    # Also print a short summary to stdout
+    print(f"\n  Timing report saved: {fname}")
+    if gaps:
+        print(f"  Slowest gaps (top 5):")
+        for delta, before, after in gaps[:5]:
+            print(f"    {delta:>3}s  {before[:55]}")
+            print(f"         → {after[:55]}")
+
+
 if __name__ == "__main__":
+    run_start = datetime.now()
+
     print("\n" + "█"*70)
     print("  STRESS TEST: All agents on gpt-5-mini")
     print("█"*70)
@@ -388,3 +443,5 @@ if __name__ == "__main__":
     print("█"*70)
     print("  Stress test complete. Review [FAIL]/[NOTE] lines above.")
     print("█"*70 + "\n")
+
+    save_timing_report(run_start)

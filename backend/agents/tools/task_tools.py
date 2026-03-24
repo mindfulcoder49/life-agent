@@ -56,6 +56,40 @@ def format_metrics_for_prompt(recent_completions: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def fetch_tasks(user_id: int) -> dict:
+    """Fetch current incomplete one-time and active recurring tasks for a user."""
+    one_time = get_rows("one_time_tasks", filters={"user_id": user_id, "completed": False}, limit=200)
+    recurring = get_rows("recurring_tasks", filters={"user_id": user_id, "active": True}, limit=200)
+    return {
+        "one_time_tasks": [{"id": r["id"], "created_at": r["created_at"], **r["data"]} for r in one_time],
+        "recurring_tasks": [{"id": r["id"], "created_at": r["created_at"], **r["data"]} for r in recurring],
+    }
+
+
+def format_tasks_for_prompt(tasks: dict) -> str:
+    """Format tasks dict for injection into agent system prompts."""
+    if not tasks:
+        return "## Current Tasks\nNo tasks loaded."
+    ot = tasks.get("one_time_tasks", [])
+    rec = tasks.get("recurring_tasks", [])
+    lines = ["## Current Tasks"]
+    if ot:
+        lines.append("\n### One-Time Tasks")
+        for t in ot:
+            deadline = f" | deadline: {t['deadline']}" if t.get("deadline") else ""
+            lines.append(f"- [id={t['id']}] {t['title']}{deadline} | est {t.get('estimated_minutes', 0)}min | load {t.get('cognitive_load', 5)}")
+    else:
+        lines.append("No incomplete one-time tasks.")
+    if rec:
+        lines.append("\n### Recurring Tasks")
+        for t in rec:
+            mandatory = " [MANDATORY]" if t.get("mandatory") else ""
+            lines.append(f"- [id={t['id']}] {t['title']}{mandatory} | every {t.get('interval_days', 1)}d | est {t.get('estimated_minutes', 0)}min")
+    else:
+        lines.append("No active recurring tasks.")
+    return "\n".join(lines)
+
+
 def make_task_tools(user_id: int, context_cache: dict = None):
     """Create task management tools bound to a specific user_id."""
     if context_cache is None:
@@ -86,6 +120,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             "completed": False,
         }
         row_id = insert_row("one_time_tasks", data)
+        context_cache.pop("tasks", None)
         return json.dumps({"success": True, "id": row_id, "message": f"Task '{title}' created."})
 
     @tool
@@ -102,6 +137,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             return json.dumps({"success": False, "message": "Invalid updates JSON."})
         merged = {**row["data"], **updates_dict}
         update_row("one_time_tasks", task_id, merged)
+        context_cache.pop("tasks", None)
         return json.dumps({"success": True, "message": f"Task {task_id} updated."})
 
     @tool
@@ -113,6 +149,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         if row["data"].get("user_id") != user_id:
             return json.dumps({"success": False, "message": "You do not own this task."})
         delete_row("one_time_tasks", task_id)
+        context_cache.pop("tasks", None)
         return json.dumps({"success": True, "message": f"Task {task_id} deleted."})
 
     @tool
@@ -125,6 +162,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             return json.dumps({"success": False, "message": "You do not own this task."})
         merged = {**row["data"], "completed": True, "completed_at": datetime.now(timezone.utc).isoformat()}
         update_row("one_time_tasks", task_id, merged)
+        context_cache.pop("tasks", None)
         return json.dumps({"success": True, "message": f"Task {task_id} marked as completed."})
 
     @tool
@@ -163,6 +201,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         if metric_data:
             data["metric"] = metric_data
         row_id = insert_row("recurring_tasks", data)
+        context_cache.pop("tasks", None)
         return json.dumps({"success": True, "id": row_id, "message": f"Recurring task '{title}' created."})
 
     @tool
@@ -179,6 +218,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             return json.dumps({"success": False, "message": "Invalid updates JSON."})
         merged = {**row["data"], **updates_dict}
         update_row("recurring_tasks", task_id, merged)
+        context_cache.pop("tasks", None)
         return json.dumps({"success": True, "message": f"Recurring task {task_id} updated."})
 
     @tool
@@ -190,6 +230,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         if row["data"].get("user_id") != user_id:
             return json.dumps({"success": False, "message": "You do not own this task."})
         delete_row("recurring_tasks", task_id)
+        context_cache.pop("tasks", None)
         return json.dumps({"success": True, "message": f"Recurring task {task_id} deleted."})
 
     @tool
@@ -243,13 +284,16 @@ def make_task_tools(user_id: int, context_cache: dict = None):
 
     @tool
     def get_tasks() -> str:
-        """Get all incomplete one-time tasks and active recurring tasks for the current user."""
+        """WARNING: get_tasks output is already in the system prompt under '## Current Tasks'. Do NOT call this unless you just wrote a task and need a refresh. Calling it otherwise wastes a round-trip and returns the same data already shown above."""
+        if "tasks" in context_cache:
+            return json.dumps(context_cache["tasks"])
         one_time = get_rows("one_time_tasks", filters={"user_id": user_id, "completed": False}, limit=200)
         recurring = get_rows("recurring_tasks", filters={"user_id": user_id, "active": True}, limit=200)
         result = {
             "one_time_tasks": [{"id": r["id"], "created_at": r["created_at"], **r["data"]} for r in one_time],
             "recurring_tasks": [{"id": r["id"], "created_at": r["created_at"], **r["data"]} for r in recurring],
         }
+        context_cache["tasks"] = result
         return json.dumps(result)
 
     @tool

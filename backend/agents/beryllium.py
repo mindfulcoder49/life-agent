@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
-from agents.tools.task_tools import make_task_tools, format_metrics_for_prompt
+from agents.tools.task_tools import make_task_tools, format_metrics_for_prompt, fetch_tasks, format_tasks_for_prompt
 from agents.tools.life_goal_tools import format_goals_for_prompt
 from agents.tools.state_tools import format_states_for_prompt
 from agents import get_api_key
@@ -35,8 +35,10 @@ These are unified because every recurring task can have a metric attached. Compl
 
 {metrics_section}
 {task_plan_section}
+{tasks_section}
+
 ## Tools
-- get_tasks: Load current tasks — call this first if you don't have them
+- get_tasks: **Do NOT call this.** Its output is already in the '## Current Tasks' section above. Only call it after you've added/updated/deleted a task and need the updated list.
 - add_one_time_task / update_one_time_task / delete_one_time_task / complete_one_time_task
 - add_recurring_task: Include a metric JSON object if the task has a measurable outcome
 - update_recurring_task / delete_recurring_task
@@ -113,6 +115,9 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
     states_section = format_states_for_prompt(context_cache.get("recent_states", []))
     metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
+    if "tasks" not in context_cache:
+        context_cache["tasks"] = fetch_tasks(user_id)
+    tasks_section = format_tasks_for_prompt(context_cache["tasks"])
 
     task_plan = context_cache.get("task_plan")
     if task_plan:
@@ -126,6 +131,7 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
         goals_section=goals_section,
         states_section=states_section,
         metrics_section=metrics_section,
+        tasks_section=tasks_section,
         task_plan_section=task_plan_section,
     )
 
