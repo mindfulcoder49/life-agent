@@ -80,6 +80,18 @@ def init_db():
             created_at TEXT,
             updated_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS discord_schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS journal_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            created_at TEXT,
+            updated_at TEXT
+        );
     """)
 
     # --- Indexes ---
@@ -119,6 +131,9 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_weekly_reviews_user_id
             ON weekly_reviews (json_extract(data, '$.user_id'));
+
+        CREATE INDEX IF NOT EXISTS idx_journal_entries_user_id
+            ON journal_entries (json_extract(data, '$.user_id'));
     """)
 
     # --- Migrations ---

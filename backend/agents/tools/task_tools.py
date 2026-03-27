@@ -95,6 +95,32 @@ def make_task_tools(user_id: int, context_cache: dict = None):
     if context_cache is None:
         context_cache = {}
 
+    def _mark_todo_item_completed(source_task_id: int, source_type: str):
+        """Check off the matching item in today's active todo list."""
+        today = user_today(user_id)
+        conn = get_db()
+        row = conn.execute("""
+            SELECT id, data FROM todo_lists
+            WHERE json_extract(data, '$.user_id') = ?
+              AND json_extract(data, '$.date') = ?
+            ORDER BY id DESC LIMIT 1
+        """, (user_id, today)).fetchone()
+        conn.close()
+        if not row:
+            return
+        try:
+            data = json.loads(row["data"])
+        except Exception:
+            return
+        changed = False
+        for section in ("items", "mandatory_items", "overdue_items"):
+            for item in data.get(section, []):
+                if item.get("source_task_id") == source_task_id and item.get("source_type") == source_type:
+                    item["completed"] = True
+                    changed = True
+        if changed:
+            update_row("todo_lists", row["id"], data)
+
     @tool
     def add_one_time_task(
         title: str,
@@ -163,6 +189,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         merged = {**row["data"], "completed": True, "completed_at": datetime.now(timezone.utc).isoformat()}
         update_row("one_time_tasks", task_id, merged)
         context_cache.pop("tasks", None)
+        _mark_todo_item_completed(task_id, "one_time")
         return json.dumps({"success": True, "message": f"Task {task_id} marked as completed."})
 
     @tool
@@ -276,6 +303,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         if est_fat_g:
             completed_data["est_fat_g"] = est_fat_g
         completed_id = insert_row("one_time_tasks", completed_data)
+        _mark_todo_item_completed(task_id, "recurring")
         return json.dumps({
             "success": True,
             "completed_record_id": completed_id,

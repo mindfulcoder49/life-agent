@@ -1,0 +1,17 @@
+name: Discord Tick
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # every 10 minutes
+  workflow_dispatch:           # allow manual trigger for testing
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping life-agent tick endpoint
+        run: |
+          curl -s -o /dev/null -w "%{http_code}" \
+            -X POST https://life-agent.fly.dev/api/discord/tick \
+            -H "X-Api-Key: ${{ secrets.ADMIN_API_KEY }}" \
+            --max-time 30

@@ -6,3 +6,5 @@ langgraph
 langchain-openai
 langchain-core
 pydantic
+python-multipart
+discord.py

@@ -14,6 +14,7 @@ from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.task_tools import make_task_tools, format_metrics_for_prompt, fetch_tasks, format_tasks_for_prompt
 from agents.tools.life_goal_tools import format_goals_for_prompt
 from agents.tools.state_tools import format_states_for_prompt
+from agents.tools.journal_tools import format_journal_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
@@ -34,6 +35,8 @@ These are unified because every recurring task can have a metric attached. Compl
 {states_section}
 
 {metrics_section}
+
+{journal_section}
 {task_plan_section}
 {tasks_section}
 
@@ -54,12 +57,13 @@ These are unified because every recurring task can have a metric attached. Compl
 5. Cognitive load: 1 = barely think about it, 10 = constantly on their mind.
 6. When done, call finish_conversation with next_agent="hydrogen".
 
-## Incoming plan from Boron
-If a plan is shown above, skip the interview:
-1. Present the plan in plain language and ask: "Ready for me to add all of these?"
-2. On confirmation, save every task using the appropriate add tool.
-3. Summarize what was saved and ask if anything needs to change.
-4. Call finish_conversation with next_agent="hydrogen".
+## Incoming plan from Boron (weekly review overhaul)
+If a plan is shown above, it may include additions, deletions, and modifications. Skip the interview:
+1. Present the full plan in plain language — what will be deleted, what will change, what will be added.
+2. Ask: "Ready for me to make all of these changes?"
+3. On confirmation, execute everything: delete with delete_one_time_task / delete_recurring_task, update with update_one_time_task / update_recurring_task, add with the appropriate add tool.
+4. Summarize what was done and ask if anything needs adjusting.
+5. Call finish_conversation with next_agent="hydrogen".
 
 ## Metric logging
 When the user reports completing something with a metric, find the relevant recurring task and call complete_recurring_task with the value. Examples:
@@ -115,6 +119,7 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
     states_section = format_states_for_prompt(context_cache.get("recent_states", []))
     metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
+    journal_section = format_journal_for_prompt(context_cache.get("recent_journal_entries", []))
     if "tasks" not in context_cache:
         context_cache["tasks"] = fetch_tasks(user_id)
     tasks_section = format_tasks_for_prompt(context_cache["tasks"])
@@ -131,6 +136,7 @@ def run_beryllium(user_id: int, messages: list, context_cache: dict = None, on_e
         goals_section=goals_section,
         states_section=states_section,
         metrics_section=metrics_section,
+        journal_section=journal_section,
         tasks_section=tasks_section,
         task_plan_section=task_plan_section,
     )

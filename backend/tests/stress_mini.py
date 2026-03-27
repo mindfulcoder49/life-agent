@@ -121,7 +121,7 @@ def seed_full_state(uid):
               [uid, title, desc, deadline, cog])
 
     # Recent state
-    query("INSERT INTO user_states (data,created_at,updated_at) VALUES (json_object('user_id',?,'energy',8,'soreness',2,'sickness',1,'notes',''),datetime('now','−1 hour'),datetime('now','−1 hour'))",
+    query("INSERT INTO user_states (data,created_at,updated_at) VALUES (json_object('user_id',?,'energy',8,'soreness',2,'sickness',1,'notes',''),datetime('now','-1 hour'),datetime('now','-1 hour'))",
           [uid])
 
 

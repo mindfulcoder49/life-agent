@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.state_tools import make_state_tools, format_states_for_prompt
 from agents.tools.task_tools import format_metrics_for_prompt
+from agents.tools.journal_tools import format_journal_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
@@ -27,6 +28,8 @@ Check in on the user's current subjective physical state. You collect exactly th
 {states_section}
 
 {metrics_section}
+
+{journal_section}
 
 ## User Has Tasks
 {has_tasks_note}
@@ -87,6 +90,7 @@ def run_lithium(user_id: int, messages: list, context_cache: dict = None, on_eve
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     states_section = format_states_for_prompt(context_cache.get("recent_states", []))
     metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
+    journal_section = format_journal_for_prompt(context_cache.get("recent_journal_entries", []))
 
     # Session state tracking: did we already save a state this session?
     session_state_id = context_cache.get("session_state_id")
@@ -117,6 +121,7 @@ def run_lithium(user_id: int, messages: list, context_cache: dict = None, on_eve
         session_state_section=session_state_section,
         states_section=states_section,
         metrics_section=metrics_section,
+        journal_section=journal_section,
         has_tasks_note=has_tasks_note,
     )
 

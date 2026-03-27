@@ -13,6 +13,7 @@ _DEFAULTS = {
     "lithium":  config.MODEL_SMALL,
     "beryllium": config.MODEL_BIG,
     "boron":    config.MODEL_BIG,
+    "carbon":   config.MODEL_SMALL,
 }
 
 _overrides: dict[str, str] = {}

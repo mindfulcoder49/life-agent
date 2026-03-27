@@ -15,6 +15,10 @@ DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "life_age
 LOG_DIR = os.getenv("LOG_DIR", os.path.join(os.path.dirname(__file__), "logs"))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
+DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "")
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
+
 MODEL_BIG = "gpt-5"
 MODEL_SMALL = "gpt-5-mini"
 

@@ -14,6 +14,7 @@ from agents.tools.task_tools import format_metrics_for_prompt
 from agents.tools.task_tools import make_task_tools, fetch_tasks, format_tasks_for_prompt
 from agents.tools.todo_tools import make_todo_tools
 from agents.tools.help_tools import make_help_tools
+from agents.tools.journal_tools import format_journal_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
@@ -27,6 +28,7 @@ Current date/time: {now}
 - **Lithium**: User State specialist (energy, soreness, sickness check-in)
 - **Beryllium**: Task and Metrics specialist (add/edit/delete tasks, log meals/sleep/exercise/lifts, review metric trends)
 - **Boron**: Weekly Review specialist (structured review of the past 7 days — completions, metrics, wins, misses, adjustments)
+- **Carbon**: Evening Reflection specialist (end-of-day journaling — what worked, what was discouraging)
 
 ## Tasks
 {has_tasks_note}
@@ -36,6 +38,9 @@ Current date/time: {now}
 ## Returning from a specialist
 If the conversation shows a specialist just finished (their message is the most recent AI message before yours), re-read the user's most recent human message. If it expressed more than one intent and the specialist only addressed one, route to the appropriate specialist for the remaining intent before concluding. Example: user said "add a task and check my state today" → Beryllium handled the task → you must now route to lithium. Do NOT conclude the turn with unaddressed intents.
 
+## Emotional and Motivational Content — Handle DIRECTLY, NEVER route
+If the user expresses feeling overwhelmed, demotivated, burnt out, stressed, or emotionally burdened — even in passing ("I'm feeling demotivated by all these tasks", "I'm overwhelmed") — respond with empathy **from you**. Acknowledge the feeling briefly and genuinely. Then, if it seems task-load related, you may offer to build a focused todo list or note that Beryllium can help trim tasks — but only after acknowledging. Do NOT immediately route to Lithium or anywhere else just because the message mentions a feeling. "I'm feeling overwhelmed" is NOT a state check-in.
+
 ## Routing Logic — FOLLOW THIS ORDER STRICTLY
 Use the data already provided above, then route:
 0. If the message contains BOTH a task/metric intent AND a state-check intent ("how I'm feeling", "check in", "check my state"), route to **lithium first** — the task intent will be handled when hydrogen is called after lithium finishes.
@@ -44,8 +49,9 @@ Use the data already provided above, then route:
 3. User wants to log metrics, track a workout, log meals/sleep/exercise/lifts, or set up metric tracking -> route to beryllium
 4. User asks to review their progress, see stats, or analyze trends -> route to beryllium
 5. User explicitly asks for a weekly review -> route to boron
+5b. User wants to journal, reflect on their day, or do an evening check-in -> route to carbon
 6. User explicitly asks to update/add/manage tasks (quick add) -> route to beryllium
-7. User explicitly asks about state/check-in -> route to lithium
+7. User explicitly asks about their physical state/check-in (energy, soreness, sickness) -> route to lithium
 8. Life goals exist, NO state in past 4 hours, AND no explicit request from the user -> route to lithium
 9. Life goals + recent state but NO tasks -> route to beryllium
 10. Life goals + recent state + tasks -> offer a daily recommendation. Check the Weekly Review section below — if it says weekly review is eligible AND the last review was 7+ days ago, also mention it: "Also, it's been X days since your last weekly review — want to do that now or after your plan?"
@@ -53,6 +59,7 @@ Use the data already provided above, then route:
 12. If the user says yes to a weekly review -> route to boron
 
 IMPORTANT: Explicit user requests (rules 2-7) take priority over automatic routing (rules 8-9). If the user says "add a task" or "manage my tasks", route to beryllium. If the user says "log my workout" or "log what I ate", route to beryllium. If the user says "weekly review" or "review my week", route to boron.
+IMPORTANT: Emotional expressions are NEVER routing triggers. "I'm demotivated", "I'm overwhelmed", "I'm stressed" — respond directly, don't route.
 
 ## When Making Recommendations
 Read everything: goals, recent states, recent metrics, completed tasks, overdue recurring tasks, incomplete tasks. Consider the user's energy level, soreness, sickness, metric trends, cognitive load of tasks, deadlines, and goal priorities. Create a concrete ordered list of what to do today and why.
@@ -69,6 +76,8 @@ Items not sourced from either table should have `source_task_id` as null, `sourc
 {states_section}
 
 {metrics_section}
+
+{journal_section}
 
 {last_review_section}
 
@@ -99,8 +108,8 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
 
     @tool
     def route_to_agent(agent_name: str) -> str:
-        """Route the user to a specialist agent. agent_name must be: helium, lithium, beryllium, or boron."""
-        valid = {"helium", "lithium", "beryllium", "boron"}
+        """Route the user to a specialist agent. agent_name must be: helium, lithium, beryllium, boron, or carbon."""
+        valid = {"helium", "lithium", "beryllium", "boron", "carbon"}
         if agent_name not in valid:
             return f"Invalid agent '{agent_name}'. Must be one of: {', '.join(valid)}"
         route_target_holder["target"] = agent_name
@@ -143,26 +152,14 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
     states_section = format_states_for_prompt(context_cache.get("recent_states", []))
     metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
-    if "tasks" not in context_cache:
-        context_cache["tasks"] = fetch_tasks(user_id)
-    tasks_section = format_tasks_for_prompt(context_cache["tasks"])
+    journal_section = format_journal_for_prompt(context_cache.get("recent_journal_entries", []))
+    tasks_section = format_tasks_for_prompt(context_cache.get("tasks", {}))
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    # Determine task count for routing rules 9/10
-    if "has_tasks" not in context_cache:
-        from database import count_rows as _count_rows
-        has_ot = _count_rows("one_time_tasks", filters={"user_id": user_id, "completed": False})
-        has_rec = _count_rows("recurring_tasks", filters={"user_id": user_id, "active": True})
-        context_cache["has_tasks"] = has_ot > 0 or has_rec > 0
-    has_tasks_note = "Tasks exist (skip rule 9, use rule 10+)." if context_cache["has_tasks"] else "No tasks yet (apply rule 9)."
+    has_tasks_note = "Tasks exist (skip rule 9, use rule 10+)." if context_cache.get("has_tasks") else "No tasks yet (apply rule 9)."
 
-    # Determine if the app has been in use long enough to suggest a weekly review
-    if "oldest_todo_date" not in context_cache:
-        from database import get_rows as _get_rows
-        _oldest = _get_rows("todo_lists", filters={"user_id": user_id}, limit=1, order_desc=False)
-        context_cache["oldest_todo_date"] = _oldest[0]["created_at"][:10] if _oldest else None
-    oldest_todo_date = context_cache["oldest_todo_date"]
+    oldest_todo_date = context_cache.get("oldest_todo_date")
 
     app_old_enough = False
     if oldest_todo_date:
@@ -191,7 +188,8 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         now=now_str, context_hint=context_hint,
         goals_section=goals_section, states_section=states_section,
-        metrics_section=metrics_section, last_review_section=last_review_section,
+        metrics_section=metrics_section, journal_section=journal_section,
+        last_review_section=last_review_section,
         has_tasks_note=has_tasks_note, tasks_section=tasks_section,
     )
 

@@ -1,10 +1,11 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import client from '../api/client'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 const profile = ref({})
@@ -14,6 +15,9 @@ const saving = ref(false)
 const message = ref('')
 const timezone = ref('')
 const tzMessage = ref('')
+const discordConnected = ref(false)
+const discordUsername = ref('')
+const discordMessage = ref('')
 
 onMounted(async () => {
   try {
@@ -21,7 +25,18 @@ onMounted(async () => {
     profile.value = res.data
     hasApiKey.value = res.data.has_api_key
     timezone.value = res.data.timezone || 'UTC'
+    discordConnected.value = res.data.discord_connected
+    discordUsername.value = res.data.discord_username || ''
   } catch {}
+
+  if (route.query.discord === 'connected') {
+    discordMessage.value = 'Discord connected!'
+    discordConnected.value = true
+    router.replace('/settings')
+  } else if (route.query.discord === 'error') {
+    discordMessage.value = 'Discord connection failed. Please try again.'
+    router.replace('/settings')
+  }
 })
 
 async function saveTimezone() {
@@ -62,6 +77,28 @@ async function clearApiKey() {
   }
 }
 
+async function connectDiscord() {
+  discordMessage.value = ''
+  try {
+    const res = await client.get('/discord/auth')
+    window.location.href = res.data.url
+  } catch (err) {
+    discordMessage.value = 'Error: ' + (err.response?.data?.detail || err.message)
+  }
+}
+
+async function disconnectDiscord() {
+  discordMessage.value = ''
+  try {
+    await client.delete('/discord/disconnect')
+    discordConnected.value = false
+    discordUsername.value = ''
+    discordMessage.value = 'Discord disconnected.'
+  } catch (err) {
+    discordMessage.value = 'Error: ' + (err.response?.data?.detail || err.message)
+  }
+}
+
 async function logout() {
   await auth.logout()
   router.push('/login')
@@ -99,6 +136,22 @@ async function logout() {
         <button v-if="hasApiKey" class="secondary" @click="clearApiKey" :disabled="saving">Clear Key</button>
       </div>
       <p v-if="message" style="margin-top: 8px; font-size: 13px; color: var(--success);">{{ message }}</p>
+    </div>
+    <div class="card">
+      <h3>Discord</h3>
+      <p style="margin-top: 4px; font-size: 13px; color: var(--text-muted);">
+        Connect your Discord account to receive proactive coaching messages.
+      </p>
+      <div style="margin-top: 12px;">
+        <p v-if="discordConnected" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 10px;">
+          Connected as <strong>{{ discordUsername }}</strong>
+        </p>
+        <div style="display: flex; gap: 8px;">
+          <button v-if="!discordConnected" @click="connectDiscord">Connect Discord</button>
+          <button v-if="discordConnected" class="secondary" @click="disconnectDiscord">Disconnect</button>
+        </div>
+      </div>
+      <p v-if="discordMessage" style="margin-top: 8px; font-size: 13px; color: var(--success);">{{ discordMessage }}</p>
     </div>
     <div class="card">
       <button class="secondary" @click="logout" style="color: var(--error);">Log Out</button>

@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -346,17 +347,42 @@ async def lifespan(app: FastAPI):
     seed_admin()
     seed_test_user()
     seed_help_articles()
+
     # Initialize agent graph
+    runner = None
     try:
         from agents.graph import create_graph_runner
-        from api.chat import router as chat_router_module
         import api.chat as chat_module
         runner = create_graph_runner()
         chat_module.graph_runner = runner
         log_info("system", "startup", "Agent graph initialized")
     except Exception as e:
         log_info("system", "startup", f"Agent graph failed to initialize: {e}")
+
+    # Start Discord bot (no-op if env vars not set)
+    discord_task = None
+    try:
+        import discord_bot as discord_module
+        discord_module.graph_runner = runner
+        discord_task = asyncio.create_task(discord_module.start_bot())
+        log_info("system", "startup", "Discord bot task started")
+    except Exception as e:
+        log_info("system", "startup", f"Discord bot failed to start: {e}")
+
     yield
+
+    # Shutdown Discord bot
+    if discord_task:
+        try:
+            import discord_bot as discord_module
+            await discord_module.stop_bot()
+            discord_task.cancel()
+            try:
+                await discord_task
+            except asyncio.CancelledError:
+                pass
+        except Exception as e:
+            log_info("system", "shutdown", f"Discord bot shutdown error: {e}")
 
 app = FastAPI(title="Life Agent", lifespan=lifespan)
 
@@ -383,6 +409,7 @@ from api.admin import router as admin_router
 from api.help import router as help_router
 from api.onboarding import router as onboarding_router
 from api.welcome import router as welcome_router
+from api.discord_routes import router as discord_router
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(users_router)
@@ -394,6 +421,7 @@ app.include_router(admin_router)
 app.include_router(help_router)
 app.include_router(onboarding_router)
 app.include_router(welcome_router)
+app.include_router(discord_router)
 
 @app.get("/api/health")
 async def health():

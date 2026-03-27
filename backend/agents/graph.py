@@ -6,7 +6,8 @@ active for that user+session. Supports multiple chat sessions per user.
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone, timedelta
 from langchain_core.messages import HumanMessage, AIMessage
 from database import insert_row, get_rows, get_db
 from file_logger import logger, log_conversation_turn
@@ -16,10 +17,17 @@ from agents.helium import run_helium
 from agents.lithium import run_lithium
 from agents.beryllium import run_beryllium
 from agents.boron import run_boron
+from agents.carbon import run_carbon
 from agents.tools.state_tools import fetch_recent_states
 from agents.tools.life_goal_tools import fetch_life_goals
-from agents.tools.task_tools import fetch_recent_metric_completions
+from agents.tools.task_tools import fetch_tasks, fetch_recent_metric_completions
 from agents.tools.review_tools import fetch_last_weekly_review
+from agents.tools.journal_tools import fetch_recent_journal_entries
+
+
+def _fetch_oldest_todo_date(user_id: int):
+    rows = get_rows("todo_lists", filters={"user_id": user_id}, limit=1, order_desc=False)
+    return rows[0]["created_at"][:10] if rows else None
 
 AGENT_RUNNERS = {
     "hydrogen": run_hydrogen,
@@ -27,9 +35,10 @@ AGENT_RUNNERS = {
     "lithium": run_lithium,
     "beryllium": run_beryllium,
     "boron": run_boron,
+    "carbon": run_carbon,
 }
 
-SPECIALISTS = {"helium", "lithium", "beryllium", "boron"}
+SPECIALISTS = {"helium", "lithium", "beryllium", "boron", "carbon"}
 
 AGENT_LABELS = {
     "hydrogen": "Hydrogen (Manager)",
@@ -37,6 +46,7 @@ AGENT_LABELS = {
     "lithium": "Lithium (State Check)",
     "beryllium": "Beryllium (Tasks & Metrics)",
     "boron": "Boron (Weekly Review)",
+    "carbon": "Carbon (Evening Reflection)",
 }
 
 
@@ -127,20 +137,49 @@ def create_graph_runner():
         active = state["active_agent"] or "hydrogen"
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        # Pre-fetch states, goals, and metrics into cache if not already present
-        if "recent_states" not in state["context_cache"]:
-            state["context_cache"]["recent_states"] = fetch_recent_states(user_id)
-        if "life_goals" not in state["context_cache"]:
-            state["context_cache"]["life_goals"] = fetch_life_goals(user_id)
-        if "recent_metrics" not in state["context_cache"]:
-            state["context_cache"]["recent_metrics"] = fetch_recent_metric_completions(user_id)
-        if "last_weekly_review" not in state["context_cache"]:
-            state["context_cache"]["last_weekly_review"] = fetch_last_weekly_review(user_id)
+        # Parallel pre-fetch: all independent DB reads run concurrently on cold session start
+        _prefetch = {
+            "recent_states":          fetch_recent_states,
+            "life_goals":             fetch_life_goals,
+            "recent_metrics":         fetch_recent_metric_completions,
+            "last_weekly_review":     fetch_last_weekly_review,
+            "tasks":                  fetch_tasks,
+            "oldest_todo_date":       _fetch_oldest_todo_date,
+            "recent_journal_entries": fetch_recent_journal_entries,
+        }
+        missing = {k: fn for k, fn in _prefetch.items() if k not in state["context_cache"]}
+        if missing:
+            with ThreadPoolExecutor(max_workers=len(missing)) as _pool:
+                _futures = {k: _pool.submit(fn, user_id) for k, fn in missing.items()}
+                for k, fut in _futures.items():
+                    state["context_cache"][k] = fut.result()
+
+        # Derive has_tasks from pre-fetched tasks (no extra DB call needed)
+        if "has_tasks" not in state["context_cache"]:
+            _t = state["context_cache"].get("tasks", {})
+            state["context_cache"]["has_tasks"] = bool(
+                _t.get("one_time_tasks") or _t.get("recurring_tasks")
+            )
 
         # Code-level pre-routing: skip Hydrogen LLM for unambiguous cases
         if active == "hydrogen" and not state["context_cache"].get("life_goals"):
             logger.info(f"[user={user_id}|{session_id}] Pre-routing -> helium (no life goals)")
             active = "helium"
+        elif active == "hydrogen" and state["context_cache"].get("life_goals"):
+            # First human message of the session + state is stale → skip Hydrogen, go to Lithium.
+            # This is exactly what Hydrogen's rule 8 would decide anyway.
+            _recent = state["context_cache"].get("recent_states", [])
+            _state_fresh = False
+            if _recent:
+                try:
+                    _ts = datetime.fromisoformat(_recent[0]["created_at"].replace("Z", "+00:00"))
+                    _state_fresh = (datetime.now(timezone.utc) - _ts).total_seconds() < 14400
+                except Exception:
+                    _state_fresh = bool(_recent)  # unreadable timestamp → assume fresh, don't pre-route
+            _first_msg = sum(1 for m in state["messages"] if isinstance(m, HumanMessage)) == 1
+            if not _state_fresh and _first_msg:
+                logger.info(f"[user={user_id}|{session_id}] Pre-routing -> lithium (stale state, session start)")
+                active = "lithium"
 
         logger.info(f"[user={user_id}|{session_id}] >>> Active: {active}")
 
@@ -183,7 +222,34 @@ def create_graph_runner():
                                           [e for e in spec_result["context_log"] if e.get("type") == "tool_call"])
 
                     if spec_hand_off == "hydrogen":
+                        # Specialist finished and handed back — call Hydrogen to compose the follow-up
                         state["active_agent"] = None
+                        if response:
+                            state["messages"].append(AIMessage(content=response))
+                        if on_event:
+                            on_event("agent_start", {"agent": "hydrogen", "label": AGENT_LABELS["hydrogen"]})
+                        h_result = run_hydrogen(user_id, state["messages"], state["context_cache"], on_event)
+                        h_response = h_result["response"]
+                        h_hand_off = h_result.get("hand_off_to")
+                        context_log = context_log + h_result["context_log"]
+                        log_conversation_turn(user_id, session_id, "hydrogen", "output",
+                                              h_response,
+                                              [e for e in h_result["context_log"] if e.get("type") == "tool_call"])
+                        if h_hand_off and h_hand_off in SPECIALISTS:
+                            if h_response:
+                                response = response + "\n\n" + h_response
+                                state["messages"].append(AIMessage(content=h_response))
+                            if on_event:
+                                on_event("agent_start", {"agent": h_hand_off, "label": AGENT_LABELS[h_hand_off]})
+                            next_result = AGENT_RUNNERS[h_hand_off](
+                                user_id, state["messages"], state["context_cache"], on_event)
+                            response = (response + "\n\n" if response else "") + next_result["response"]
+                            context_log = context_log + next_result["context_log"]
+                            state["active_agent"] = h_hand_off
+                            log_conversation_turn(user_id, session_id, h_hand_off, "output",
+                                                  next_result["response"])
+                        elif h_response:
+                            response = response + "\n\n" + h_response
                     elif spec_hand_off and spec_hand_off in SPECIALISTS and spec_hand_off != hand_off_to:
                         state["active_agent"] = spec_hand_off
                         response, context_log = _chain_to(
@@ -309,8 +375,16 @@ def create_graph_runner():
         """Streaming run — executes _run_core in a thread with on_event callback."""
         return await asyncio.to_thread(_run_core, user_id, message, session_id, on_event)
 
+    def set_active_agent(user_id: int, session_id: str, agent: str):
+        """Pre-set the active agent for a session (e.g., for proactive Discord routing)."""
+        key = (user_id, session_id)
+        if key not in sessions:
+            sessions[key] = {"messages": [], "active_agent": None, "context_cache": {}}
+        sessions[key]["active_agent"] = agent if agent in AGENT_RUNNERS else None
+
     run.reset = reset
     run.get_active_agent = get_active_agent
+    run.set_active_agent = set_active_agent
     run.list_sessions = list_sessions
     run.run_stream = run_stream
     run.invalidate_goals_cache = invalidate_goals_cache

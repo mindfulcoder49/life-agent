@@ -21,6 +21,8 @@ def get_profile(request: Request):
         "timezone": data.get("timezone", "UTC"),
         "aspirational_image_b64": data.get("aspirational_image_b64"),
         "is_new": is_new,
+        "discord_connected": bool(data.get("discord_user_id")),
+        "discord_username": data.get("discord_username"),
     }
 
 @router.put("/me")

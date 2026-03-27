@@ -10,6 +10,7 @@ from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.life_goal_tools import make_life_goal_tools, format_goals_for_prompt
 from agents.tools.task_tools import format_metrics_for_prompt
+from agents.tools.journal_tools import format_journal_for_prompt
 from agents import get_api_key
 from file_logger import logger
 import config
@@ -24,6 +25,8 @@ Interview the user to define their life goals. Each goal needs: title, descripti
 {goals_section}
 
 {metrics_section}
+
+{journal_section}
 
 ## Tools
 - add_life_goal: Create a goal
@@ -77,8 +80,10 @@ def run_helium(user_id: int, messages: list, context_cache: dict = None, on_even
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
     metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
+    journal_section = format_journal_for_prompt(context_cache.get("recent_journal_entries", []))
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        now=now_str, goals_section=goals_section, metrics_section=metrics_section
+        now=now_str, goals_section=goals_section, metrics_section=metrics_section,
+        journal_section=journal_section,
     )
 
     call_messages = [SystemMessage(content=system_prompt)] + messages
