@@ -5,22 +5,11 @@ import TodoItem from './TodoItem.vue'
 
 const todos = ref([])
 const loading = ref(true)
-const recurringMetrics = ref({}) // task_id -> metric object
 
 onMounted(async () => {
   try {
-    const [todosRes, recurringRes] = await Promise.all([
-      client.get('/todo-lists', { params: { limit: 20 } }),
-      client.get('/tasks/recurring', { params: { limit: 200 } }),
-    ])
-    todos.value = todosRes.data.items || []
-    const map = {}
-    for (const task of (recurringRes.data.items || [])) {
-      if (task.data?.metric) {
-        map[task.id] = task.data.metric
-      }
-    }
-    recurringMetrics.value = map
+    const res = await client.get('/todo-lists', { params: { limit: 20 } })
+    todos.value = res.data.items || []
   } catch {
     todos.value = []
   } finally {
@@ -28,16 +17,10 @@ onMounted(async () => {
   }
 })
 
-function getItemMetric(item) {
-  if (typeof item !== 'object' || item?.source_type !== 'recurring' || !item?.source_task_id) return null
-  return recurringMetrics.value[item.source_task_id] || null
-}
-
 async function completeItem(todoId, itemIndex, todo, payload, section = 'items') {
-  const { metricValue, completionDate } = payload || {}
+  const { completionDate } = payload || {}
   try {
     const body = { item_index: itemIndex, section }
-    if (metricValue != null) body.metric_value = String(metricValue)
     if (completionDate != null) body.completion_date = completionDate
     const res = await client.post(`/todo-lists/${todoId}/complete-item`, body)
     todo.data = res.data.data
@@ -77,53 +60,35 @@ async function uncompleteItem(todoId, itemIndex, todo, section = 'items') {
         </div>
         <p v-if="todo.data?.reasoning" class="reasoning">{{ todo.data.reasoning }}</p>
 
-        <!-- AI-chosen items -->
+        <!-- Active habits auto-added by backend -->
+        <div v-if="todo.data?.habit_items?.length" class="todo-section">
+          <div class="section-label section-label--habits">Active Habits</div>
+          <div class="todo-items">
+            <TodoItem
+              v-for="(item, idx) in todo.data.habit_items"
+              :key="'habit-' + idx"
+              :item="item"
+              :completed="!!item.completed"
+              :streak-label="item.streak_label"
+              :list-date="todo.data?.date"
+              @complete="(payload) => completeItem(todo.id, idx, todo, payload, 'habit_items')"
+              @uncomplete="uncompleteItem(todo.id, idx, todo, 'habit_items')"
+            />
+          </div>
+        </div>
+
+        <!-- AI-chosen one-time task items -->
         <div v-if="todo.data?.items?.length" class="todo-section">
-          <div class="section-label">Today's Plan</div>
+          <div class="section-label">Today's Tasks</div>
           <div class="todo-items">
             <TodoItem
               v-for="(item, idx) in todo.data.items"
               :key="'llm-' + idx"
               :item="item"
               :completed="!!item.completed"
-              :metric="getItemMetric(item)"
               :list-date="todo.data?.date"
               @complete="(payload) => completeItem(todo.id, idx, todo, payload, 'items')"
               @uncomplete="uncompleteItem(todo.id, idx, todo, 'items')"
-            />
-          </div>
-        </div>
-
-        <!-- Mandatory recurring tasks auto-added by backend -->
-        <div v-if="todo.data?.mandatory_items?.length" class="todo-section">
-          <div class="section-label section-label--mandatory">Mandatory</div>
-          <div class="todo-items">
-            <TodoItem
-              v-for="(item, idx) in todo.data.mandatory_items"
-              :key="'man-' + idx"
-              :item="item"
-              :completed="!!item.completed"
-              :metric="getItemMetric(item)"
-              :list-date="todo.data?.date"
-              @complete="(payload) => completeItem(todo.id, idx, todo, payload, 'mandatory_items')"
-              @uncomplete="uncompleteItem(todo.id, idx, todo, 'mandatory_items')"
-            />
-          </div>
-        </div>
-
-        <!-- Overdue recurring tasks auto-added by backend -->
-        <div v-if="todo.data?.overdue_items?.length" class="todo-section">
-          <div class="section-label section-label--overdue">Overdue</div>
-          <div class="todo-items">
-            <TodoItem
-              v-for="(item, idx) in todo.data.overdue_items"
-              :key="'ov-' + idx"
-              :item="item"
-              :completed="!!item.completed"
-              :metric="getItemMetric(item)"
-              :list-date="todo.data?.date"
-              @complete="(payload) => completeItem(todo.id, idx, todo, payload, 'overdue_items')"
-              @uncomplete="uncompleteItem(todo.id, idx, todo, 'overdue_items')"
             />
           </div>
         </div>
@@ -164,11 +129,8 @@ async function uncompleteItem(todoId, itemIndex, todo, section = 'items') {
   color: var(--text-muted);
   margin-bottom: 4px;
 }
-.section-label--mandatory {
-  color: #f59e0b;
-}
-.section-label--overdue {
-  color: #ef4444;
+.section-label--habits {
+  color: #10b981;
 }
 .todo-items {
   display: flex;

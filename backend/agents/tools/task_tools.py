@@ -1,59 +1,7 @@
 from langchain_core.tools import tool
 from database import insert_row, update_row, delete_row, get_rows, get_row, get_db, user_today
 from datetime import datetime, timezone, timedelta
-from collections import defaultdict
 import json
-
-
-def fetch_recent_metric_completions(user_id: int, days: int = 14) -> list[dict]:
-    """Fetch recent recurring task completions that have a metric_value logged."""
-    conn = get_db()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    rows = conn.execute("""
-        SELECT * FROM one_time_tasks
-        WHERE json_extract(data, '$.user_id') = ?
-          AND json_extract(data, '$.from_recurring_id') IS NOT NULL
-          AND json_extract(data, '$.metric_value') IS NOT NULL
-          AND json_extract(data, '$.completed_at') >= ?
-        ORDER BY json_extract(data, '$.completed_at') DESC
-        LIMIT 200
-    """, (user_id, cutoff)).fetchall()
-    conn.close()
-    return [{"id": r["id"], "created_at": r["created_at"], **json.loads(r["data"])} for r in rows]
-
-
-def format_metrics_for_prompt(recent_completions: list[dict]) -> str:
-    """Format recent metric completions for injection into agent system prompts."""
-    if not recent_completions:
-        return "## Recent Metrics\nNo metric data logged yet."
-
-    groups = defaultdict(list)
-    for c in recent_completions:
-        snapshot = c.get("metric_snapshot") or {}
-        label = snapshot.get("label") or c.get("title", "Unknown")
-        groups[label].append(c)
-
-    lines = ["## Recent Metrics"]
-    for label, entries in sorted(groups.items()):
-        sorted_entries = sorted(entries, key=lambda x: x.get("completed_at", ""), reverse=True)[:5]
-        snapshot = sorted_entries[0].get("metric_snapshot") or {}
-        unit = snapshot.get("unit", "")
-        header = f"\n### {label}"
-        if unit:
-            header += f" ({unit})"
-        lines.append(header)
-        for e in sorted_entries:
-            val = e.get("metric_value", "")
-            ts = (e.get("completed_at") or "")[:10]
-            extra = ""
-            if e.get("est_calories"):
-                parts = [f"~{e['est_calories']} cal"]
-                if e.get("est_protein_g"):
-                    parts.append(f"{e['est_protein_g']}g protein")
-                extra = f" ({', '.join(parts)})"
-            lines.append(f"- [{ts}] {val}{extra}")
-
-    return "\n".join(lines)
 
 
 def fetch_tasks(user_id: int) -> dict:
@@ -81,12 +29,19 @@ def format_tasks_for_prompt(tasks: dict) -> str:
     else:
         lines.append("No incomplete one-time tasks.")
     if rec:
-        lines.append("\n### Recurring Tasks")
-        for t in rec:
-            mandatory = " [MANDATORY]" if t.get("mandatory") else ""
-            lines.append(f"- [id={t['id']}] {t['title']}{mandatory} | every {t.get('interval_days', 1)}d | est {t.get('estimated_minutes', 0)}min")
+        active = [t for t in rec if t.get("status", "active") == "active"]
+        habits = [t for t in rec if t.get("status") == "habit"]
+        if active:
+            lines.append("\n### Active Habit Tasks (building — one per goal)")
+            for t in active:
+                goal_ids = t.get("life_goal_ids", [])
+                lines.append(f"- [id={t['id']}] {t['title']} | goals={goal_ids} | est {t.get('estimated_minutes', 0)}min")
+        if habits:
+            lines.append("\n### Established Habits (graduated)")
+            for t in habits:
+                lines.append(f"- [id={t['id']}] {t['title']} ✓")
     else:
-        lines.append("No active recurring tasks.")
+        lines.append("No recurring tasks.")
     return "\n".join(lines)
 
 
@@ -94,6 +49,33 @@ def make_task_tools(user_id: int, context_cache: dict = None):
     """Create task management tools bound to a specific user_id."""
     if context_cache is None:
         context_cache = {}
+
+    def _get_streak(task_id: int) -> int:
+        """Count completions of a recurring task in the last 7 days."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        conn = get_db()
+        count = conn.execute("""
+            SELECT COUNT(*) FROM one_time_tasks
+            WHERE json_extract(data, '$.user_id') = ?
+              AND json_extract(data, '$.from_recurring_id') = ?
+              AND json_extract(data, '$.completed_at') >= ?
+        """, (user_id, task_id, cutoff)).fetchone()[0]
+        conn.close()
+        return count
+
+    def _check_and_graduate(task_id: int) -> dict:
+        """Check streak and graduate to habit status if >= 6/7 days."""
+        streak = _get_streak(task_id)
+        graduated = False
+        if streak >= 6:
+            row = get_row("recurring_tasks", task_id)
+            if row and row["data"].get("status", "active") != "habit":
+                data = row["data"]
+                data["status"] = "habit"
+                update_row("recurring_tasks", task_id, data)
+                context_cache.pop("tasks", None)
+                graduated = True
+        return {"streak": streak, "graduated": graduated}
 
     def _mark_todo_item_completed(source_task_id: int, source_type: str):
         """Check off the matching item in today's active todo list."""
@@ -113,13 +95,49 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         except Exception:
             return
         changed = False
-        for section in ("items", "mandatory_items", "overdue_items"):
+        for section in ("items", "habit_items", "mandatory_items", "overdue_items"):
             for item in data.get(section, []):
                 if item.get("source_task_id") == source_task_id and item.get("source_type") == source_type:
                     item["completed"] = True
                     changed = True
         if changed:
             update_row("todo_lists", row["id"], data)
+
+    @tool
+    def get_habit_progress() -> str:
+        """Get all recurring tasks with their 7-day completion streak and status.
+        Use this to see which habits are active vs graduated, and track progress."""
+        rows = get_rows("recurring_tasks", filters={"user_id": user_id, "active": True}, limit=200)
+        if not rows:
+            return json.dumps([])
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join(["?"] * len(ids))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        conn = get_db()
+        streak_rows = conn.execute(f"""
+            SELECT json_extract(data, '$.from_recurring_id') as task_id, COUNT(*) as count
+            FROM one_time_tasks
+            WHERE json_extract(data, '$.user_id') = ?
+              AND json_extract(data, '$.from_recurring_id') IN ({placeholders})
+              AND json_extract(data, '$.completed_at') >= ?
+            GROUP BY json_extract(data, '$.from_recurring_id')
+        """, [user_id] + ids + [cutoff]).fetchall()
+        conn.close()
+        streak_map = {int(r["task_id"]): r["count"] for r in streak_rows if r["task_id"]}
+        result = []
+        for r in rows:
+            d = r["data"]
+            tid = r["id"]
+            streak = streak_map.get(tid, 0)
+            result.append({
+                "id": tid,
+                "title": d.get("title"),
+                "status": d.get("status", "active"),
+                "streak_last_7": streak,
+                "streak_label": f"{streak}/7 this week",
+                "life_goal_ids": d.get("life_goal_ids", []),
+            })
+        return json.dumps(result)
 
     @tool
     def add_one_time_task(
@@ -196,24 +214,18 @@ def make_task_tools(user_id: int, context_cache: dict = None):
     def add_recurring_task(
         title: str,
         description: str = "",
-        interval_days: int = 7,
+        interval_days: int = 1,
         estimated_minutes: int = 0,
         cognitive_load: int = 5,
         life_goal_ids: str = "[]",
-        metric: str = "",
-        mandatory: bool = False,
     ) -> str:
-        """Add a recurring task. interval_days is how often it repeats. life_goal_ids is a JSON array of goal IDs. metric is an optional JSON object: {"label": "...", "unit": "...", "value_type": "number"|"text"|"meal"}. Set mandatory=True if this task is directly essential for one of the user's life goals — mandatory tasks are always included in the daily todo list when due, in a dedicated section."""
+        """Add a recurring habit task. interval_days is how often it repeats (default 1 = daily).
+        life_goal_ids is a JSON array of goal IDs — always include this.
+        One active habit task per goal — check get_habit_progress first to ensure no active task exists for this goal."""
         try:
             goal_ids = json.loads(life_goal_ids) if isinstance(life_goal_ids, str) else life_goal_ids
         except json.JSONDecodeError:
             goal_ids = []
-        metric_data = None
-        if metric:
-            try:
-                metric_data = json.loads(metric) if isinstance(metric, str) else metric
-            except json.JSONDecodeError:
-                pass
         data = {
             "user_id": user_id,
             "title": title,
@@ -223,17 +235,16 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             "cognitive_load": cognitive_load,
             "life_goal_ids": goal_ids,
             "active": True,
-            "mandatory": mandatory,
+            "status": "active",
         }
-        if metric_data:
-            data["metric"] = metric_data
         row_id = insert_row("recurring_tasks", data)
         context_cache.pop("tasks", None)
-        return json.dumps({"success": True, "id": row_id, "message": f"Recurring task '{title}' created."})
+        return json.dumps({"success": True, "id": row_id, "message": f"Habit task '{title}' created."})
 
     @tool
     def update_recurring_task(task_id: int, updates: str) -> str:
-        """Update a recurring task. Pass updates as a JSON string with fields to change."""
+        """Update a recurring task. Pass updates as a JSON string with fields to change.
+        To graduate manually: {\"status\": \"habit\"}. To reactivate a lapsed habit: {\"status\": \"active\"}."""
         row = get_row("recurring_tasks", task_id)
         if not row:
             return json.dumps({"success": False, "message": "Recurring task not found."})
@@ -263,14 +274,10 @@ def make_task_tools(user_id: int, context_cache: dict = None):
     @tool
     def complete_recurring_task(
         task_id: int,
-        metric_value: str = "",
-        metric_notes: str = "",
-        est_calories: int = 0,
-        est_protein_g: int = 0,
-        est_carbs_g: int = 0,
-        est_fat_g: int = 0,
+        notes: str = "",
     ) -> str:
-        """Mark a recurring task as completed for this cycle. If the task has a metric, pass metric_value. For meal-type metrics, also pass est_calories, est_protein_g, est_carbs_g, est_fat_g."""
+        """Mark a recurring habit task as completed for today. Streak is checked automatically —
+        at 6/7 completions in the last 7 days the task graduates to established habit status."""
         row = get_row("recurring_tasks", task_id)
         if not row:
             return json.dumps({"success": False, "message": "Recurring task not found."})
@@ -285,34 +292,26 @@ def make_task_tools(user_id: int, context_cache: dict = None):
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "completed_date": user_today(user_id),
             "life_goal_ids": row["data"].get("life_goal_ids", []),
-            "cognitive_load": row["data"].get("cognitive_load", 5),
-            "estimated_minutes": row["data"].get("estimated_minutes", 0),
         }
-        if row["data"].get("metric"):
-            completed_data["metric_snapshot"] = row["data"]["metric"]
-        if metric_value:
-            completed_data["metric_value"] = metric_value
-        if metric_notes:
-            completed_data["metric_notes"] = metric_notes
-        if est_calories:
-            completed_data["est_calories"] = est_calories
-        if est_protein_g:
-            completed_data["est_protein_g"] = est_protein_g
-        if est_carbs_g:
-            completed_data["est_carbs_g"] = est_carbs_g
-        if est_fat_g:
-            completed_data["est_fat_g"] = est_fat_g
+        if notes:
+            completed_data["notes"] = notes
         completed_id = insert_row("one_time_tasks", completed_data)
         _mark_todo_item_completed(task_id, "recurring")
+        graduation = _check_and_graduate(task_id)
+        msg = f"'{row['data']['title']}' completed. Streak: {graduation['streak']}/7 this week."
+        if graduation["graduated"]:
+            msg += " This habit has graduated to established status — it's now part of who you are."
         return json.dumps({
             "success": True,
             "completed_record_id": completed_id,
-            "message": f"Recurring task '{row['data']['title']}' completed for this cycle.",
+            "streak": graduation["streak"],
+            "graduated": graduation["graduated"],
+            "message": msg,
         })
 
     @tool
     def get_tasks() -> str:
-        """WARNING: get_tasks output is already in the system prompt under '## Current Tasks'. Do NOT call this unless you just wrote a task and need a refresh. Calling it otherwise wastes a round-trip and returns the same data already shown above."""
+        """WARNING: output is already in the system prompt under '## Current Tasks'. Only call after writing a task and needing a refresh."""
         if "tasks" in context_cache:
             return json.dumps(context_cache["tasks"])
         one_time = get_rows("one_time_tasks", filters={"user_id": user_id, "completed": False}, limit=200)
@@ -335,6 +334,7 @@ def make_task_tools(user_id: int, context_cache: dict = None):
         return json.dumps(goals)
 
     return [
+        get_habit_progress,
         add_one_time_task,
         update_one_time_task,
         delete_one_time_task,

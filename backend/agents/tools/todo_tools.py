@@ -9,18 +9,20 @@ def make_todo_tools(user_id: int, context_cache: dict = None):
     if context_cache is None:
         context_cache = {}
 
-    def _get_due_recurring(exclude_ids: set) -> tuple[list, list]:
-        """Return (mandatory_due, overdue_due) for recurring tasks not in exclude_ids.
-        Both lists respect each task's interval — only tasks overdue by their own schedule are included."""
+    def _get_active_habits_with_streaks(exclude_ids: set) -> list:
+        """Return active (building) recurring tasks that are due, with 7-day streak info."""
         recurring = get_rows("recurring_tasks", filters={"user_id": user_id, "active": True}, limit=200)
-        if not recurring:
-            return [], []
+        active_habits = [t for t in recurring if t["data"].get("status", "active") == "active"]
+        if not active_habits:
+            return []
 
         now = datetime.now(timezone.utc)
-        ids = [t["id"] for t in recurring]
+        ids = [t["id"] for t in active_habits]
         placeholders = ",".join(["?"] * len(ids))
+        cutoff_7 = (now - timedelta(days=7)).isoformat()
+
         conn = get_db()
-        rows = conn.execute(f"""
+        last_done_rows = conn.execute(f"""
             SELECT json_extract(data, '$.from_recurring_id') as task_id,
                    MAX(COALESCE(
                        json_extract(data, '$.completed_date'),
@@ -31,45 +33,53 @@ def make_todo_tools(user_id: int, context_cache: dict = None):
               AND json_extract(data, '$.from_recurring_id') IN ({placeholders})
             GROUP BY json_extract(data, '$.from_recurring_id')
         """, [user_id] + ids).fetchall()
+
+        streak_rows = conn.execute(f"""
+            SELECT json_extract(data, '$.from_recurring_id') as task_id, COUNT(*) as count
+            FROM one_time_tasks
+            WHERE json_extract(data, '$.user_id') = ?
+              AND json_extract(data, '$.from_recurring_id') IN ({placeholders})
+              AND json_extract(data, '$.completed_at') >= ?
+            GROUP BY json_extract(data, '$.from_recurring_id')
+        """, [user_id] + ids + [cutoff_7]).fetchall()
         conn.close()
 
         last_done_map = {}
-        for r in rows:
-            tid = r["task_id"]
-            if tid is not None:
-                last_done_map[int(tid)] = r["last_done"]
+        for r in last_done_rows:
+            if r["task_id"] is not None:
+                last_done_map[int(r["task_id"])] = r["last_done"]
 
-        mandatory_due = []
-        overdue_due = []
-        for task in recurring:
+        streak_map = {int(r["task_id"]): r["count"] for r in streak_rows if r["task_id"]}
+
+        result = []
+        for task in active_habits:
             tid = task["id"]
             if tid in exclude_ids:
                 continue
-            interval = task["data"].get("interval_days", 7)
+            interval = task["data"].get("interval_days", 1)
             cutoff = (now - timedelta(days=interval)).date().isoformat()
             last_done = last_done_map.get(tid)
             if not last_done or last_done <= cutoff:
-                item = {
+                streak = streak_map.get(tid, 0)
+                result.append({
                     "title": task["data"]["title"],
                     "description": task["data"].get("description", ""),
                     "source_task_id": tid,
                     "source_type": "recurring",
                     "completed": False,
-                }
-                if task["data"].get("mandatory"):
-                    mandatory_due.append(item)
-                else:
-                    overdue_due.append(item)
+                    "streak": streak,
+                    "streak_label": f"{streak}/7",
+                })
 
-        return mandatory_due, overdue_due
+        return result
 
     @tool
     def create_todo_list(date: str, items: str, reasoning: str = "", agent_notes: str = "") -> str:
         """Create a daily todo list. items is a JSON array of AI-chosen task objects with fields:
         'title', 'description' (copy from source task if present), 'estimated_minutes', 'priority',
-        'source_task_id' (int or null), 'source_type' ("one_time", "recurring", or null), 'completed' (false).
-        Focus on one-time tasks and context-driven items — the backend automatically appends any mandatory
-        or overdue recurring tasks you didn't include into separate sections."""
+        'source_task_id' (int or null), 'source_type' ("one_time" or null), 'completed' (false).
+        Focus on one-time tasks — the backend automatically appends any active habit tasks that are
+        due today into a separate habit_items section with streak progress."""
         try:
             items_list = json.loads(items) if isinstance(items, str) else items
         except json.JSONDecodeError:
@@ -82,15 +92,14 @@ def make_todo_tools(user_id: int, context_cache: dict = None):
             if isinstance(i, dict) and i.get("source_task_id") and i.get("source_type") == "recurring"
         }
 
-        # Auto-inject mandatory and overdue recurring tasks the LLM missed
-        mandatory_items, overdue_items = _get_due_recurring(llm_task_ids)
+        # Auto-inject active building habits that are due today
+        habit_items = _get_active_habits_with_streaks(llm_task_ids)
 
         data = {
             "user_id": user_id,
             "date": date,
             "items": items_list,
-            "mandatory_items": mandatory_items,
-            "overdue_items": overdue_items,
+            "habit_items": habit_items,
             "reasoning": reasoning,
             "agent_notes": agent_notes,
         }
@@ -100,9 +109,8 @@ def make_todo_tools(user_id: int, context_cache: dict = None):
             "success": True,
             "id": row_id,
             "message": (
-                f"Todo list for {date} created: {len(items_list)} AI-chosen items, "
-                f"{len(mandatory_items)} mandatory items auto-added, "
-                f"{len(overdue_items)} overdue items auto-added."
+                f"Todo list for {date} created: {len(items_list)} task items, "
+                f"{len(habit_items)} active habit items auto-added."
             ),
         })
 
@@ -144,11 +152,4 @@ def make_todo_tools(user_id: int, context_cache: dict = None):
                 recent.append({"id": r["id"], "created_at": r["created_at"], **r["data"]})
         return json.dumps(recent)
 
-    @tool
-    def get_overdue_recurring_tasks() -> str:
-        """Check for recurring tasks that haven't been completed recently (based on their interval).
-        Returns all overdue tasks regardless of mandatory flag."""
-        mandatory, overdue = _get_due_recurring(set())
-        return json.dumps(mandatory + overdue)
-
-    return [create_todo_list, update_todo_list, get_completed_tasks_recent, get_overdue_recurring_tasks]
+    return [create_todo_list, update_todo_list, get_completed_tasks_recent]

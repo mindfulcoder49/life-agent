@@ -10,7 +10,6 @@ from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage
 from agents.tools.life_goal_tools import make_life_goal_tools, format_goals_for_prompt
 from agents.tools.state_tools import format_states_for_prompt
-from agents.tools.task_tools import format_metrics_for_prompt
 from agents.tools.task_tools import make_task_tools, fetch_tasks, format_tasks_for_prompt
 from agents.tools.todo_tools import make_todo_tools
 from agents.tools.help_tools import make_help_tools
@@ -26,8 +25,8 @@ Current date/time: {now}
 ## Your Team (named after elements)
 - **Helium**: Life Goals specialist
 - **Lithium**: User State specialist (energy, soreness, sickness check-in)
-- **Beryllium**: Task and Metrics specialist (add/edit/delete tasks, log meals/sleep/exercise/lifts, review metric trends)
-- **Boron**: Weekly Review specialist (structured review of the past 7 days — completions, metrics, wins, misses, adjustments)
+- **Beryllium**: Task specialist (add/edit/delete tasks, log habit completions, manage one-time tasks)
+- **Boron**: Weekly Review specialist (habit health review — streaks, misses, task overhaul)
 - **Carbon**: Evening Reflection specialist (end-of-day journaling — what worked, what was discouraging)
 
 ## Tasks
@@ -43,26 +42,24 @@ If the user expresses feeling overwhelmed, demotivated, burnt out, stressed, or 
 
 ## Routing Logic — FOLLOW THIS ORDER STRICTLY
 Use the data already provided above, then route:
-0. If the message contains BOTH a task/metric intent AND a state-check intent ("how I'm feeling", "check in", "check my state"), route to **lithium first** — the task intent will be handled when hydrogen is called after lithium finishes.
+0. If the message contains BOTH a task intent AND a state-check intent ("how I'm feeling", "check in", "check my state"), route to **lithium first** — the task intent will be handled when hydrogen is called after lithium finishes.
 1. NO life goals exist -> route to helium. This is ALWAYS the first priority.
 2. User explicitly asks to update/add goals -> route to helium
-3. User wants to log metrics, track a workout, log meals/sleep/exercise/lifts, or set up metric tracking -> route to beryllium
-4. User asks to review their progress, see stats, or analyze trends -> route to beryllium
-5. User explicitly asks for a weekly review -> route to boron
-5b. User wants to journal, reflect on their day, or do an evening check-in -> route to carbon
-6. User explicitly asks to update/add/manage tasks (quick add) -> route to beryllium
-7. User explicitly asks about their physical state/check-in (energy, soreness, sickness) -> route to lithium
-8. Life goals exist, NO state in past 4 hours, AND no explicit request from the user -> route to lithium
-9. Life goals + recent state but NO tasks -> route to beryllium
-10. Life goals + recent state + tasks -> offer a daily recommendation. Check the Weekly Review section below — if it says weekly review is eligible AND the last review was 7+ days ago, also mention it: "Also, it's been X days since your last weekly review — want to do that now or after your plan?"
-11. If the user says yes to a recommendation -> call get_tasks and get_overdue_recurring_tasks to get full context. From incomplete one-time tasks, overdue recurring tasks, and the user's current state/goals, synthesize a prioritized plan. Call create_todo_list with only the AI-chosen items (focus on one-time tasks and context-driven picks — the backend will automatically append any mandatory and overdue recurring tasks you didn't include into separate sections). The list id is returned in the tool result and stored in context cache. If the user later says you missed something, call update_todo_list with that list id to add the item.
-12. If the user says yes to a weekly review -> route to boron
+3. User explicitly asks for a weekly review -> route to boron
+3b. User wants to journal, reflect on their day, or do an evening check-in -> route to carbon
+4. User explicitly asks to update/add/manage/complete tasks -> route to beryllium
+5. User explicitly asks about their physical state/check-in (energy, soreness, sickness) -> route to lithium
+6. Life goals exist, NO state in past 4 hours, AND no explicit request from the user -> route to lithium
+7. Life goals + recent state but NO tasks -> route to beryllium
+8. Life goals + recent state + tasks -> offer a daily recommendation. Check the Weekly Review section below — if it says weekly review is eligible AND the last review was 7+ days ago, also mention it: "Also, it's been X days since your last weekly review — want to do that now or after your plan?"
+9. If the user says yes to a recommendation -> call get_tasks to get a fresh task list. From incomplete one-time tasks and the user's current state/goals, synthesize a prioritized plan. Call create_todo_list with the AI-chosen one-time task items — the backend automatically appends any active habit tasks due today into a separate habit_items section. The list id is returned in the tool result. If the user later says you missed something, call update_todo_list with that list id.
+10. If the user says yes to a weekly review -> route to boron
 
 IMPORTANT: Explicit user requests (rules 2-7) take priority over automatic routing (rules 8-9). If the user says "add a task" or "manage my tasks", route to beryllium. If the user says "log my workout" or "log what I ate", route to beryllium. If the user says "weekly review" or "review my week", route to boron.
 IMPORTANT: Emotional expressions are NEVER routing triggers. "I'm demotivated", "I'm overwhelmed", "I'm stressed" — respond directly, don't route.
 
 ## When Making Recommendations
-Read everything: goals, recent states, recent metrics, completed tasks, overdue recurring tasks, incomplete tasks. Consider the user's energy level, soreness, sickness, metric trends, cognitive load of tasks, deadlines, and goal priorities. Create a concrete ordered list of what to do today and why.
+Read everything: goals, recent states, current tasks, habit streaks. Consider the user's energy level, soreness, sickness, cognitive load of tasks, deadlines, and goal priorities. Create a concrete ordered list of what to do today and why.
 
 When building a todo list, each item sourced from a task MUST include:
 - `source_task_id`: the task's database ID (int)
@@ -74,8 +71,6 @@ Items not sourced from either table should have `source_task_id` as null, `sourc
 {goals_section}
 
 {states_section}
-
-{metrics_section}
 
 {journal_section}
 
@@ -91,7 +86,8 @@ Items not sourced from either table should have `source_task_id` as null, `sourc
 - When routing, your response can be brief or empty — the specialist will greet the user.
 - Life goals, recent states, and recent metrics are already provided above — do NOT call get_life_goals to make routing decisions.
 - **Do NOT call get_tasks** — its output is already in the '## Current Tasks' section above. Call it only after you've written a task and need a refresh.
-- If you already have recent data from the context cache, do NOT call those tools again — use the cached info to make your routing decision."""
+- If you already have recent data from the context cache, do NOT call those tools again.
+- Life goals and recent states are already provided above — do NOT call get_life_goals to make routing decisions."""
 
 
 def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_event=None) -> dict:
@@ -139,7 +135,7 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
     # Build context cache hint (exclude data shown in dedicated sections and internal flags)
     cache_hints = []
     excluded = {
-        "recent_states", "life_goals", "recent_metrics", "last_weekly_review",
+        "recent_states", "life_goals", "last_weekly_review",
         "oldest_todo_date", "has_tasks", "session_state_id",
     }
     for key, cached in context_cache.items():
@@ -151,7 +147,6 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
 
     goals_section = format_goals_for_prompt(context_cache.get("life_goals", []))
     states_section = format_states_for_prompt(context_cache.get("recent_states", []))
-    metrics_section = format_metrics_for_prompt(context_cache.get("recent_metrics", []))
     journal_section = format_journal_for_prompt(context_cache.get("recent_journal_entries", []))
     tasks_section = format_tasks_for_prompt(context_cache.get("tasks", {}))
 
@@ -188,7 +183,7 @@ def run_hydrogen(user_id: int, messages: list, context_cache: dict = None, on_ev
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         now=now_str, context_hint=context_hint,
         goals_section=goals_section, states_section=states_section,
-        metrics_section=metrics_section, journal_section=journal_section,
+        journal_section=journal_section,
         last_review_section=last_review_section,
         has_tasks_note=has_tasks_note, tasks_section=tasks_section,
     )

@@ -84,10 +84,27 @@ def make_review_tools(user_id: int):
         else:
             last_done_map = {}
 
+        # 7-day streak counts
+        if rec_rows:
+            cutoff_7 = (now - timedelta(days=7)).isoformat()
+            conn2 = get_db()
+            raw_streaks = conn2.execute(f"""
+                SELECT json_extract(data, '$.from_recurring_id') as task_id, COUNT(*) as count
+                FROM one_time_tasks
+                WHERE json_extract(data, '$.user_id') = ?
+                  AND json_extract(data, '$.from_recurring_id') IN ({placeholders})
+                  AND json_extract(data, '$.completed_at') >= ?
+                GROUP BY json_extract(data, '$.from_recurring_id')
+            """, [user_id] + ids + [cutoff_7]).fetchall()
+            conn2.close()
+            streak_map = {int(r["task_id"]): r["count"] for r in raw_streaks if r["task_id"]}
+        else:
+            streak_map = {}
+
         recurring_status = []
         for r in rec_rows:
             d = r["data"]
-            interval = d.get("interval_days", 7)
+            interval = d.get("interval_days", 1)
             cutoff = (now - timedelta(days=interval)).date().isoformat()
             last_done = last_done_map.get(r["id"])
             overdue = not last_done or last_done <= cutoff
@@ -97,11 +114,14 @@ def make_review_tools(user_id: int):
                     days_since = (now.date() - datetime.fromisoformat(last_done).date()).days
                 except Exception:
                     pass
+            streak = streak_map.get(r["id"], 0)
             recurring_status.append({
                 "id": r["id"],
                 "title": d.get("title"),
+                "status": d.get("status", "active"),
                 "interval_days": interval,
-                "mandatory": d.get("mandatory", False),
+                "streak_last_7": streak,
+                "streak_label": f"{streak}/7 this week",
                 "last_completed": last_done,
                 "days_since_last": days_since,
                 "overdue": overdue,

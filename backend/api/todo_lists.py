@@ -33,7 +33,7 @@ def get_by_date(request: Request, date: str):
     return d
 
 
-VALID_SECTIONS = {"items", "mandatory_items", "overdue_items"}
+VALID_SECTIONS = {"items", "habit_items", "mandatory_items", "overdue_items"}
 
 
 class CompleteItemRequest(BaseModel):

@@ -4,16 +4,13 @@ import { ref, computed } from 'vue'
 const props = defineProps({
   item: [Object, String],
   completed: { type: Boolean, default: false },
-  metric: { type: Object, default: null },
+  streakLabel: { type: String, default: null },
   listDate: { type: String, default: null },
 })
 
 const emit = defineEmits(['complete', 'uncomplete'])
 
-const showMetricInput = ref(false)
 const showDateInput = ref(false)
-const metricValue = ref('')
-const pendingMetricValue = ref(null)
 const completionDate = ref('')
 
 function localToday() {
@@ -49,46 +46,18 @@ function onCheckboxClick() {
     emit('uncomplete')
     return
   }
-  if (props.metric) {
-    showMetricInput.value = true
-  } else if (needsDatePrompt.value) {
-    completionDate.value = props.listDate
-    showDateInput.value = true
-  } else {
-    emit('complete', { metricValue: null, completionDate: null })
-  }
-}
-
-function submitMetric() {
-  pendingMetricValue.value = metricValue.value || null
-  showMetricInput.value = false
-  metricValue.value = ''
   if (needsDatePrompt.value) {
     completionDate.value = props.listDate
     showDateInput.value = true
   } else {
-    emit('complete', { metricValue: pendingMetricValue.value, completionDate: null })
-    pendingMetricValue.value = null
-  }
-}
-
-function skipMetric() {
-  pendingMetricValue.value = null
-  showMetricInput.value = false
-  metricValue.value = ''
-  if (needsDatePrompt.value) {
-    completionDate.value = props.listDate
-    showDateInput.value = true
-  } else {
-    emit('complete', { metricValue: null, completionDate: null })
+    emit('complete', { completionDate: null })
   }
 }
 
 function submitDate() {
-  emit('complete', { metricValue: pendingMetricValue.value, completionDate: completionDate.value || null })
+  emit('complete', { completionDate: completionDate.value || null })
   showDateInput.value = false
   completionDate.value = ''
-  pendingMetricValue.value = null
 }
 </script>
 
@@ -98,22 +67,10 @@ function submitDate() {
     <div class="todo-content">
       <div class="todo-main">
         <span class="todo-title">{{ getTitle() }}</span>
+        <span v-if="streakLabel && !isCompleted()" class="streak-badge">{{ streakLabel }}</span>
         <span v-if="getTime()" class="todo-time">{{ getTime() }}</span>
       </div>
       <p v-if="getDetails()" class="todo-details">{{ getDetails() }}</p>
-      <div v-if="showMetricInput" class="metric-input-row">
-        <span class="metric-label">{{ metric.label }}:</span>
-        <input
-          v-model="metricValue"
-          :type="metric.value_type === 'number' ? 'number' : 'text'"
-          :placeholder="metric.value_type === 'meal' ? 'describe what you ate/drank' : (metric.unit || 'enter value')"
-          class="metric-input"
-          @keydown.enter="submitMetric"
-          autofocus
-        />
-        <button class="btn-done" @click="submitMetric">Done</button>
-        <button class="btn-skip" @click="skipMetric">Skip</button>
-      </div>
       <div v-if="showDateInput" class="date-input-row">
         <span class="date-label">Which day did you complete this?</span>
         <input
@@ -155,6 +112,14 @@ function submitDate() {
 .todo-title {
   font-size: 14px;
 }
+.streak-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #10b981;
+  background: color-mix(in srgb, #10b981 12%, transparent);
+  padding: 1px 6px;
+  border-radius: 10px;
+}
 .todo-time {
   color: var(--text-muted);
   font-size: 12px;
@@ -167,28 +132,6 @@ function submitDate() {
 .todo-completed .todo-title {
   text-decoration: line-through;
   color: var(--text-muted);
-}
-.metric-input-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  flex-wrap: wrap;
-}
-.metric-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-.metric-input {
-  flex: 1;
-  min-width: 120px;
-  padding: 4px 8px;
-  font-size: 13px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
 }
 .date-input-row {
   display: flex;
@@ -217,15 +160,6 @@ function submitDate() {
   color: white;
   border: none;
   border-radius: 4px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.btn-skip {
-  padding: 4px 8px;
-  font-size: 12px;
-  background: transparent;
-  color: var(--text-muted);
-  border: none;
   cursor: pointer;
   flex-shrink: 0;
 }

@@ -20,7 +20,7 @@ from agents.boron import run_boron
 from agents.carbon import run_carbon
 from agents.tools.state_tools import fetch_recent_states
 from agents.tools.life_goal_tools import fetch_life_goals
-from agents.tools.task_tools import fetch_tasks, fetch_recent_metric_completions
+from agents.tools.task_tools import fetch_tasks
 from agents.tools.review_tools import fetch_last_weekly_review
 from agents.tools.journal_tools import fetch_recent_journal_entries
 
@@ -69,12 +69,6 @@ def create_graph_runner():
         for key, session in sessions.items():
             if key[0] == user_id:
                 session["context_cache"].pop("life_goals", None)
-
-    def invalidate_metrics_cache(user_id: int):
-        """Clear cached recent metrics for all in-memory sessions belonging to this user."""
-        for key, session in sessions.items():
-            if key[0] == user_id:
-                session["context_cache"].pop("recent_metrics", None)
 
     def reset(user_id: int, session_id: str = None):
         if session_id:
@@ -141,7 +135,6 @@ def create_graph_runner():
         _prefetch = {
             "recent_states":          fetch_recent_states,
             "life_goals":             fetch_life_goals,
-            "recent_metrics":         fetch_recent_metric_completions,
             "last_weekly_review":     fetch_last_weekly_review,
             "tasks":                  fetch_tasks,
             "oldest_todo_date":       _fetch_oldest_todo_date,
@@ -388,5 +381,4 @@ def create_graph_runner():
     run.list_sessions = list_sessions
     run.run_stream = run_stream
     run.invalidate_goals_cache = invalidate_goals_cache
-    run.invalidate_metrics_cache = invalidate_metrics_cache
     return run
